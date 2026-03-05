@@ -8,7 +8,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Feynman AI | Master Any Topic",
+  title: "TeachBack AI | Master Any Topic",
   description: "Learn by teaching. An AI companion that acts like a student to help you master concepts.",
 };
 

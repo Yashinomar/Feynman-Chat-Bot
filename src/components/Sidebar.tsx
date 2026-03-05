@@ -42,7 +42,7 @@ export default function Sidebar({ topic, masteryScore, messages, onGoHome }: Sid
         <aside className={`glass-panel ${styles.sidebar}`}>
             <div className={styles.sidebarHeader}>
                 <div className={styles.headerTop}>
-                    <h1>Feynman AI</h1>
+                    <h1>TeachBack AI</h1>
                     <button className={styles.homeBtn} onClick={onGoHome} title="Back to Home">
                         🏠
                     </button>

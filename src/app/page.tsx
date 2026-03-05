@@ -150,7 +150,7 @@ export default function Home() {
     return (
       <div className={styles.homeContainer}>
         <header className={styles.homeHeader}>
-          <h1>Feynman AI</h1>
+          <h1>TeachBack AI</h1>
           <p>Master any topic by teaching it.</p>
         </header>
 
