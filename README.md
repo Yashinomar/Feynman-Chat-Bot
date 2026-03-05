@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TeachBack AI
 
-## Getting Started
+TeachBack AI (formerly Feynman AI) is a Next.js web application designed to help you master concepts by teaching them. It acts as a curious student, letting you explain topics in your own words. It then assesses your understanding, asks questions, and calculates a Mastery Score.
 
-First, run the development server:
+## Tech Stack
+- Frontend & API: **Next.js** (React)
+- Styling: **CSS Modules**
+- AI Model Integration: **GPT4All** (Local AI API)
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+---
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Prerequisites (What you need to run this)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Unlike Python projects that use a `requirements.txt`, Node.js projects use a `package.json` file to manage dependencies. 
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+To run this on an entirely new computer, you will need:
 
-## Learn More
+1. **Node.js**: You need to have Node.js installed (version 18+ is recommended). You can download it from [nodejs.org](https://nodejs.org/). This will also install `npm` (Node Package Manager).
+2. **GPT4All App (Local AI)**: Since this application is set up to run **fully offline** using a local AI model, you need to have GPT4All installed and running on your machine.
+   - Download GPT4All from [gpt4all.io](https://gpt4all.io/).
+   - Open GPT4All, go to Settings -> Server, and **Enable API Server**.
+   - Make sure you have downloaded a model in GPT4All (e.g., `Meta-Llama-3-8B-Instruct`).
 
-To learn more about Next.js, take a look at the following resources:
+## Setup Instructions
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. **Clone the repository and navigate into the project:**
+   ```bash
+   git clone https://github.com/Yashinomar/Feynman-Chat-Bot.git
+   cd Feynman-Chat-Bot
+   ```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+2. **Install the dependencies:**
+   Instead of `pip install -r requirements.txt`, you run:
+   ```bash
+   npm install
+   ```
+   This will read the `package.json` file and download all necessary packages into a `node_modules` folder.
 
-## Deploy on Vercel
+3. **Set up Environment Variables:**
+   Create a `.env.local` file in the root directory (if it isn't there already), and specify the exact model name you downloaded in GPT4All:
+   ```env
+   LOCAL_MODEL_NAME="Meta-Llama-3-8B-Instruct.Q4_0.gguf"
+   # Or whichever exact model file name you are using in GPT4All
+   ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+4. **Run the Application:**
+   Start the local development server:
+   ```bash
+   npm run dev
+   ```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+5. **Open the App:**
+   Open your browser and navigate to [http://localhost:3000](http://localhost:3000) to start using TeachBack AI!
