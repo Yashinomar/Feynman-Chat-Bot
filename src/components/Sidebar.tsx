@@ -8,9 +8,10 @@ interface SidebarProps {
     topic: string;
     masteryScore: number;
     messages: Message[];
+    onGoHome: () => void;
 }
 
-export default function Sidebar({ topic, masteryScore, messages }: SidebarProps) {
+export default function Sidebar({ topic, masteryScore, messages, onGoHome }: SidebarProps) {
     const [hint, setHint] = useState<string | null>(null);
     const [isLoadingHint, setIsLoadingHint] = useState(false);
 
@@ -40,7 +41,12 @@ export default function Sidebar({ topic, masteryScore, messages }: SidebarProps)
     return (
         <aside className={`glass-panel ${styles.sidebar}`}>
             <div className={styles.sidebarHeader}>
-                <h1>Feynman AI</h1>
+                <div className={styles.headerTop}>
+                    <h1>Feynman AI</h1>
+                    <button className={styles.homeBtn} onClick={onGoHome} title="Back to Home">
+                        🏠
+                    </button>
+                </div>
                 <p className={styles.subtitle}>Teach to Learn</p>
             </div>
 
