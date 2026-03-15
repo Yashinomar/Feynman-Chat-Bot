@@ -20,9 +20,10 @@
 
 body {
   background-color: var(--bg-color);
+  background-image: radial-gradient(circle at 15% 50%, rgba(37, 99, 235, 0.08) 0%, transparent 40%), radial-gradient(circle at 85% 30%, rgba(16, 185, 129, 0.05) 0%, transparent 40%);
+  background-attachment: fixed;
   color: var(--text-primary);
   font-family: var(--font-inter), sans-serif;
-  overflow: hidden;
 }
 
 h1,
@@ -62,20 +63,20 @@ h6 {
 }
 
 .button-primary {
-  background: var(--accent-color);
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
   color: white;
   border: none;
   border-radius: 8px;
   padding: 10px 16px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s ease;
-  box-shadow: 0 0 15px var(--accent-glow);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 15px rgba(37, 99, 235, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
 }
 
 .button-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 0 25px var(--accent-glow);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(37, 99, 235, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.2) inset;
 }
 
 .button-secondary {
@@ -115,6 +116,10 @@ h6 {
   position: fixed;
 }
 
+.absolute {
+  position: absolute;
+}
+
 .inset-0 {
   top: 0;
   right: 0;
@@ -128,4 +133,16 @@ h6 {
 
 .pointer-events-none {
   pointer-events: none;
+}
+
+.overflow-hidden {
+  overflow: hidden;
+}
+
+.transition-opacity {
+  transition-property: opacity;
+}
+
+.duration-300 {
+  transition-duration: 300ms;
 }

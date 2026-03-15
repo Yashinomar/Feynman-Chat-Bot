@@ -1,55 +1,60 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
 
-const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
+// Initialize the assistant bot
+const assistantBotClient = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
 
 export async function POST(req: NextRequest) {
     try {
-        const { topic, messages, score } = await req.json();
+        const studentRequestPayload = await req.json();
+        const activeCourseConcept = studentRequestPayload.topic;
+        const currentChatLog = studentRequestPayload.messages;
+        const currentGrade = studentRequestPayload.score;
 
-        if (!ai) {
-            console.warn("GEMINI_API_KEY not found. Using mock hint.");
+        if (!assistantBotClient) {
+            console.warn("API KEY MISSING! Returning a hardcoded hint for now so the UI doesn't break.");
             return NextResponse.json({
-                hint: `Try explaining the "how" and "why" of ${topic} using a simple analogy.`
+                hint: `Maybe try breaking down the "how" and "why" of ${activeCourseConcept} using a simple real-world analogy?`
             });
         }
 
-        const systemInstruction = `
-You are a tutor observing a student explaining the topic "${topic}" to a beginner. 
-The current mastery score evaluated by the system is ${score}/100.
-Based on the chat history, what is ONE specific, concise sentence suggesting what the student should try to explain next to improve their explanation?
-Provide only the sentence, no extra text. Format as JSON:
+        const helperBotInstruction = `
+You are a helpful teaching assistant guiding a student struggling with "${activeCourseConcept}" using the Feynman Technique.
+The student's current graded mastery score is ${currentGrade}/100.
+They are stuck or asked for a hint. Look at the chat history, and give them ONE specific, concise sentence that serves as a conceptual clue, an analogy, or points out a missing piece of information.
+DO NOT just say "what should we explain next?". You need to actually give them a gentle nudge in the right direction without spoon-feeding them the answer.
+Return only the sentence. Format it exactly as JSON so my parser doesn't crash:
 { "hint": "Your short hint here." }
 `;
 
-        const contents = (messages || []).map((msg: any) => ({
-            role: msg.role === 'ai' ? 'model' : 'user',
-            parts: [{ text: msg.content }]
+        const mappedBotHistory = (currentChatLog || []).map((msgNode: any) => ({
+            role: msgNode.role === 'ai' ? 'model' : 'user',
+            parts: [{ text: msgNode.content }]
         }));
 
-        const response = await ai.models.generateContent({
+        const assistantInference = await assistantBotClient.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: [
-                { role: 'user', parts: [{ text: systemInstruction }] },
-                ...contents
+                { role: 'user', parts: [{ text: helperBotInstruction }] },
+                ...mappedBotHistory
             ],
             config: {
                 responseMimeType: "application/json",
-                temperature: 0.7,
+                temperature: 0.7, // Higher temp here so hints feel more creative and less robotic
             }
         });
 
-        const responseText = response.text;
-        if (!responseText) {
-            throw new Error('No hint received from Gemini');
+        const rawInferenceString = assistantInference.text;
+        if (!rawInferenceString) {
+            throw new Error('LLM returned an empty string for the hint request');
         }
 
-        const parsedResponse = JSON.parse(responseText);
+        const cleanParsedHint = JSON.parse(rawInferenceString);
 
-        return NextResponse.json({ hint: parsedResponse.hint });
+        return NextResponse.json({ hint: cleanParsedHint.hint });
 
-    } catch (error) {
-        console.error("Hint API Error:", error);
-        return NextResponse.json({ error: 'Failed to generate hint' }, { status: 500 });
+    } catch (unexpectedFault) {
+        console.error("The hint generation pipeline failed:", unexpectedFault);
+        return NextResponse.json({ error: 'Failed to generate a helpful hint from the LLM' }, { status: 500 });
     }
 }

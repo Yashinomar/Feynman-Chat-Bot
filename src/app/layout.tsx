@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import ReactiveBackground from "../components/ReactiveBackground";
+import Navbar from "../components/Navbar";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -9,8 +10,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "TeachBack AI | Master Any Topic",
-  description: "Learn by teaching. An AI companion that acts like a student to help you master concepts.",
+  title: "TeachBack – Learn by Explaining",
+  description: "A small study companion that lets you teach concepts out loud, spots the fuzzy parts, and helps you tighten your understanding.",
 };
 
 export default function RootLayout({
@@ -22,6 +23,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.variable}`}>
         <ReactiveBackground />
+        <Navbar />
         {children}
       </body>
     </html>

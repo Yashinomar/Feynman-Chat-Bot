@@ -16,9 +16,10 @@ interface ChatAreaProps {
     messages: Message[];
     onSendMessage: (text: string) => void;
     isLoading: boolean;
+    masteryScore?: number;
 }
 
-export default function ChatArea({ topic, messages, onSendMessage, isLoading }: ChatAreaProps) {
+export default function ChatArea({ topic, messages, onSendMessage, isLoading, masteryScore = 0 }: ChatAreaProps) {
     const [inputText, setInputText] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -45,12 +46,12 @@ export default function ChatArea({ topic, messages, onSendMessage, isLoading }: 
     };
 
     return (
-        <main className={styles.main}>
+        <div className={styles.chatWrapper}>
             <header className={styles.chatHeader}>
-                <h2>Current Topic: <span>{topic}</span></h2>
+                <h2>Current topic: <span>{topic}</span></h2>
             </header>
 
-            <div className={styles.chatArea}>
+            <div id="chat-history-container" className={styles.chatArea}>
                 {messages.map((msg) => (
                     <div
                         key={msg.id}
@@ -68,33 +69,39 @@ export default function ChatArea({ topic, messages, onSendMessage, isLoading }: 
                     <div className={`${styles.message} ${styles.aiMessage} animate-fade-in`}>
                         <div className={styles.avatar}>AI</div>
                         <div className={styles.messageContent}>
-                            <p>Thinking...</p>
+                            <p>Thinking this through…</p>
                         </div>
                     </div>
                 )}
                 <div ref={messagesEndRef} />
             </div>
 
+            {masteryScore === 100 && (
+                <div style={{ textAlign: 'center', padding: '16px', background: 'rgba(16, 185, 129, 0.2)', borderTop: '1px solid rgba(16, 185, 129, 0.4)', color: '#10b981', fontWeight: 600, borderBottomLeftRadius: '16px', borderBottomRightRadius: '16px' }}>
+                    🎉 Topic mastered — you’ve explained the big ideas clearly.
+                </div>
+            )}
+
             <div className={styles.inputArea}>
                 <div className={styles.inputWrapper}>
                     <textarea
-                        placeholder="Explain it like I'm a beginner..."
+                        placeholder={masteryScore === 100 ? "You’ve wrapped this one up nicely." : "Explain it as if I’ve never seen it before..."}
                         className={styles.textarea}
                         rows={1}
                         value={inputText}
                         onChange={(e) => setInputText(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        disabled={isLoading}
+                        disabled={isLoading || masteryScore === 100}
                     ></textarea>
                     <button
                         className="button-primary"
                         onClick={handleSend}
-                        disabled={isLoading}
+                        disabled={isLoading || !inputText.trim() || masteryScore === 100}
                     >
-                        Send
+                        {isLoading ? '...' : 'Send'}
                     </button>
                 </div>
             </div>
-        </main>
+        </div>
     );
 }

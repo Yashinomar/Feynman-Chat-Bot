@@ -1,0 +1,201 @@
+.container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: #0f172a;
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 32px;
+    background: rgba(30, 41, 59, 0.8);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.roomInfo {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.backBtn {
+    color: #94a3b8;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.95rem;
+    transition: color 0.2s;
+}
+
+.backBtn:hover {
+    color: white;
+}
+
+.roomBadge {
+    background: rgba(139, 92, 246, 0.2);
+    color: #c4b5fd;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.statusIndicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+.waiting {
+    background: rgba(245, 158, 11, 0.1);
+    color: #fcd34d;
+    border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.connected {
+    background: rgba(16, 185, 129, 0.1);
+    color: #6ee7b7;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.mainPanel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    maxWidth: 900px;
+    margin: 0 auto;
+    width: 100%;
+    padding: 24px;
+}
+
+.chatWindow {
+    flex: 1;
+    background: rgba(30, 41, 59, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    padding: 24px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.messageRow {
+    display: flex;
+    margin-bottom: 16px;
+    flex-direction: column;
+}
+
+.messageRow.you {
+    align-items: flex-end;
+}
+
+.messageRow.partner {
+    align-items: flex-start;
+}
+
+.messageRow.tutor {
+    align-items: center;
+}
+
+.messageBubble {
+    max-width: 70%;
+    padding: 16px 20px;
+    border-radius: 16px;
+    font-size: 1rem;
+    line-height: 1.5;
+    position: relative;
+}
+
+.label {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-bottom: 6px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.you .messageBubble {
+    background: #3b82f6;
+    color: white;
+    border-bottom-right-radius: 4px;
+}
+
+.partner .messageBubble {
+    background: #8b5cf6;
+    color: white;
+    border-bottom-left-radius: 4px;
+}
+
+.tutor .messageBubble {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #e2e8f0;
+    max-width: 90%;
+    text-align: center;
+}
+
+.tutor .label {
+    color: #10b981;
+}
+
+.inputArea {
+    display: flex;
+    gap: 12px;
+}
+
+.inputField {
+    flex: 1;
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 16px 20px;
+    color: white;
+    font-size: 1rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.inputField:focus {
+    border-color: #8b5cf6;
+}
+
+.inputField:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.sendBtn {
+    background: #8b5cf6;
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 0 24px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sendBtn:hover:not(:disabled) {
+    background: #7c3aed;
+    transform: translateY(-1px);
+}
+
+.sendBtn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
