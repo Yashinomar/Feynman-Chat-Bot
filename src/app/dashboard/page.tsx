@@ -2,27 +2,34 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, BrainCircuit, MessageSquare, TrendingUp, Award, Zap, Star, ShieldCheck, BookOpen, Trophy, Calendar } from 'lucide-react';
 import styles from './dashboard.module.css';
 import badgeStyles from './badges.module.css';
+import { useSession } from 'next-auth/react';
 import type { Session } from '../chat/[id]/page';
 
 export default function Dashboard() {
+  const router = useRouter();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isMounted, setIsMounted] = useState(false);
+  const { data: authSession, status } = useSession();
 
   useEffect(() => {
     setIsMounted(true);
-    const stored = localStorage.getItem('feynman_sessions');
-    if (stored) {
-      try {
-        const parsed: Record<string, Session> = JSON.parse(stored);
-        setSessions(Object.values(parsed));
-      } catch (e) {
-        console.error("Failed to parse sessions", e);
-      }
+    if (status === 'unauthenticated') {
+      router.push('/login');
+    } else if (status === 'authenticated') {
+      fetch('/api/sessions')
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) {
+            setSessions(data);
+          }
+        })
+        .catch(e => console.error("Failed to fetch sessions from DB", e));
     }
-  }, []);
+  }, [status, router]);
 
   const stats = useMemo(() => {
     if (!sessions.length) return null;

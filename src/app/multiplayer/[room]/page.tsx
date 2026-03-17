@@ -136,7 +136,7 @@ export default function MultiplayerRoom() {
                 await peer.setRemoteDescription(new RTCSessionDescription(data.guestAnswer));
               }
 
-              if (data.guestIceCandidates && data.guestIceCandidates.length > processedIceCount.current) {
+              if (peer.remoteDescription && data.guestIceCandidates && data.guestIceCandidates.length > processedIceCount.current) {
                 for (let i = processedIceCount.current; i < data.guestIceCandidates.length; i++) {
                   await peer.addIceCandidate(new RTCIceCandidate(data.guestIceCandidates[i]))
                     .catch(e => console.error("Error adding ice candidate", e));
@@ -176,7 +176,7 @@ export default function MultiplayerRoom() {
                 });
               }
 
-              if (data.hostIceCandidates && data.hostIceCandidates.length > processedIceCount.current) {
+              if (peer.remoteDescription && data.hostIceCandidates && data.hostIceCandidates.length > processedIceCount.current) {
                 for (let i = processedIceCount.current; i < data.hostIceCandidates.length; i++) {
                   await peer.addIceCandidate(new RTCIceCandidate(data.hostIceCandidates[i]))
                     .catch(e => console.error("Error adding ice candidate", e));

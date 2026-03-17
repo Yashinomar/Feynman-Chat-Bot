@@ -11,7 +11,6 @@ TeachBack AI is a Next.js web application designed to help you master concepts b
 
 ## Prerequisites (What you need to run this)
 
-Unlike Python projects that use a `requirements.txt`, Node.js projects use a `package.json` file to manage dependencies. 
 
 To run this on an entirely new computer, you will need:
 
@@ -28,7 +27,7 @@ To run this on an entirely new computer, you will need:
    ```
 
 2. **Install the dependencies:**
-   Instead of `pip install -r requirements.txt`, you run:
+   Install npm on your computer:
    ```bash
    npm install
    ```

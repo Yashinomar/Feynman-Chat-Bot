@@ -5,37 +5,43 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { BookOpen, Calendar, Star, Trash2, ArrowRight } from 'lucide-react';
 import styles from './library.module.css';
+import { useSession } from 'next-auth/react';
 import type { Session } from '../chat/[id]/page';
 
 export default function Library() {
   const router = useRouter();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isMounted, setIsMounted] = useState(false);
+  
+  const { data: authSession, status } = useSession();
 
   useEffect(() => {
     setIsMounted(true);
-    const stored = localStorage.getItem('feynman_sessions');
-    if (stored) {
-      try {
-        const parsed: Record<string, Session> = JSON.parse(stored);
-        // Sort by most recently updated
-        const sorted = Object.values(parsed).sort((a, b) => b.updatedAt - a.updatedAt);
-        setSessions(sorted);
-      } catch (e) {
-        console.error("Failed to parse sessions", e);
-      }
+    if (status === 'unauthenticated') {
+      router.push('/login');
+    } else if (status === 'authenticated') {
+      fetch('/api/sessions')
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) {
+            const sorted = data.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+            setSessions(sorted);
+          }
+        })
+        .catch(e => console.error("Failed to fetch sessions from DB", e));
     }
-  }, []);
+  }, [status, router]);
 
-  const handleDelete = (e: React.MouseEvent, id: string) => {
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     e.preventDefault();
-    const stored = localStorage.getItem('feynman_sessions');
-    if (stored) {
-      const parsed: Record<string, Session> = JSON.parse(stored);
-      delete parsed[id];
-      localStorage.setItem('feynman_sessions', JSON.stringify(parsed));
-      setSessions(prev => prev.filter(s => s.id !== id));
+    try {
+      const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setSessions(prev => prev.filter(s => s.id !== id));
+      }
+    } catch (err) {
+      console.error("Failed to delete session", err);
     }
   };
 

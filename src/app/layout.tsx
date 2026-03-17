@@ -4,6 +4,8 @@ import "./globals.css";
 import ReactiveBackground from "../components/ReactiveBackground";
 import Navbar from "../components/Navbar";
 
+import { Providers } from "../components/Providers";
+
 const inter = Inter({
   variable: "--font-inter",
   subsets: ["latin"],
@@ -22,9 +24,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.variable}`}>
-        <ReactiveBackground />
-        <Navbar />
-        {children}
+        <Providers>
+          <ReactiveBackground />
+          <Navbar />
+          {children}
+        </Providers>
       </body>
     </html>
   );

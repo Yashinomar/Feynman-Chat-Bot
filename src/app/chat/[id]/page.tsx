@@ -74,37 +74,38 @@ export default function ChatSession() {
 
   useEffect(() => {
     setIsMounted(true);
-    const stored = localStorage.getItem('feynman_sessions');
-    if (stored) {
-      try {
-        setSessions(JSON.parse(stored));
-      } catch (e) {
-        console.error("Failed to parse sessions", e);
-      }
-    }
+    fetch('/api/sessions')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          const fetchedSessions: Record<string, Session> = {};
+          data.forEach((s: any) => {
+            fetchedSessions[s.id] = s;
+          });
+          setSessions(fetchedSessions);
+        }
+      })
+      .catch(e => console.error("Failed to fetch sessions", e));
   }, []);
 
-  useEffect(() => {
-    if (isMounted) {
-      localStorage.setItem('feynman_sessions', JSON.stringify(sessions));
-    }
-  }, [sessions, isMounted]);
-
-
-
-  const handleDeleteSession = (e: React.MouseEvent | null, id: string) => {
+  const handleDeleteSession = async (e: React.MouseEvent | null, id: string) => {
     if (e) {
       e.stopPropagation();
     }
 
-    setSessions(prev => {
-      const newSessions = { ...prev };
-      delete newSessions[id];
-      return newSessions;
-    });
+    try {
+      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+      setSessions(prev => {
+        const newSessions = { ...prev };
+        delete newSessions[id];
+        return newSessions;
+      });
 
-    if (currentSessionId === id) {
-      router.push('/');
+      if (currentSessionId === id) {
+        router.push('/');
+      }
+    } catch (err) {
+      console.error("Failed to delete session", err);
     }
   };
 
@@ -134,6 +135,12 @@ export default function ChatSession() {
     setIsLoading(true);
 
     try {
+      await fetch(`/api/sessions/${currentSessionId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'user', content: text })
+      });
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -162,6 +169,12 @@ export default function ChatSession() {
         content: data.reply
       };
 
+      await fetch(`/api/sessions/${currentSessionId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'ai', content: data.reply })
+      });
+
       setSessions(prev => {
         const currentSession = prev[currentSessionId];
         const newScore = data.score !== undefined ? data.score : currentSession.masteryScore;
@@ -188,6 +201,20 @@ export default function ChatSession() {
           }
         };
       });
+
+      if (data.score !== undefined) {
+        const srsUpdates = calculateNextReview(
+          data.score, 
+          session.repetition, 
+          session.efactor, 
+          session.interval
+        );
+        fetch(`/api/sessions/${currentSessionId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ masteryScore: data.score, ...srsUpdates })
+        }).catch(e => console.error(e));
+      }
 
       if (currentSessionId && currentSession) {
         fetch('/api/factcheck', {

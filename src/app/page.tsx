@@ -3,8 +3,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { BrainCircuit, BookOpen, Star, Zap, BookCopy, Users, Plus, LogIn, FileText, TrendingUp } from 'lucide-react';
+import { BrainCircuit, BookOpen, Star, Zap, BookCopy, Users, Plus, LogIn, FileText, TrendingUp, Target } from 'lucide-react';
 import styles from './page.module.css';
+import { useSession } from 'next-auth/react';
 import type { Session } from './chat/[id]/page';
 
 export default function DashboardHome() {
@@ -25,17 +26,27 @@ export default function DashboardHome() {
   const [studentLevel, setStudentLevel] = useState<'kid' | 'highschool' | 'professional'>('highschool');
   const [studentBehavior, setStudentBehavior] = useState<'curious' | 'skeptical' | 'enthusiastic' | 'distracted'>('curious');
 
+  const { data: authSession, status } = useSession();
+
   useEffect(() => {
     setIsMounted(true);
-    const stored = localStorage.getItem('feynman_sessions');
-    if (stored) {
-      try {
-        setSessions(JSON.parse(stored));
-      } catch (e) {
-        console.error("Failed to parse sessions", e);
-      }
+    if (status === 'unauthenticated') {
+      router.push('/login');
+    } else if (status === 'authenticated') {
+      fetch('/api/sessions')
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) {
+            const fetchedSessions: Record<string, Session> = {};
+            data.forEach((s: any) => {
+              fetchedSessions[s.id] = s;
+            });
+            setSessions(fetchedSessions);
+          }
+        })
+        .catch(e => console.error("Failed to fetch sessions", e));
     }
-  }, []);
+  }, [status, router]);
 
   const prepSoloSession = () => {
     if (!newTopic.trim()) return;
@@ -43,34 +54,29 @@ export default function DashboardHome() {
     setShowPersonaModal(true);
   };
 
-  const executeSoloSession = (topicStr: string) => {
-    const id = Date.now().toString();
-    const newSession: Session = {
-      id,
-      topic: topicStr,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      messages: [
-        {
-          id: Date.now().toString(),
-          role: 'ai',
-          content: `Let’s dig into ${topicStr} together. Start by explaining the main idea in your own words, as if you were chatting with a friend who’s new to it.`
-        }
-      ],
-      status: 'active',
-      masteryScore: 0,
-      reviewDate: Date.now(),
-      interval: 0,
-      repetition: 0,
-      efactor: 2.5,
-      studentLevel,
-      studentBehavior
-    };
-    
-    const updatedSessions = { ...sessions, [id]: newSession };
-    localStorage.setItem('feynman_sessions', JSON.stringify(updatedSessions));
-
-    router.push(`/chat/${id}`);
+  const executeSoloSession = async (topicStr: string) => {
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: topicStr,
+          studentLevel,
+          studentBehavior,
+          messages: [{
+            role: 'ai',
+            content: `Let’s dig into ${topicStr} together. Start by explaining the main idea in your own words, as if you were chatting with a friend who’s new to it.`
+          }]
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.id) {
+        setSessions(prev => ({ ...prev, [data.id]: data }));
+        router.push(`/chat/${data.id}`);
+      }
+    } catch (e) {
+      console.error("Failed to create session", e);
+    }
   };
 
   const prepMultiplayerSession = () => {
@@ -146,33 +152,28 @@ export default function DashboardHome() {
       }
       
       if (data.sessionId) {
-        const id = data.sessionId;
-        const newSession: Session = {
-          id,
-          topic: topicStr,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          messages: [
-            {
-              id: Date.now().toString(),
+        // We assume backend RAG indexing is done, now we create the session in DB
+        const sessionRes = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            topic: topicStr,
+            isRagSession: true,
+            studentLevel,
+            studentBehavior,
+            messages: [{
               role: 'ai',
               content: `I’ve gone through your document **${topicStr}**. When you’re ready, start by telling me one key idea from it and we’ll build from there.`
-            }
-          ],
-          status: 'active',
-          masteryScore: 0,
-          reviewDate: Date.now(),
-          interval: 0,
-          repetition: 0,
-          efactor: 2.5,
-          isRagSession: true,
-          studentLevel,
-          studentBehavior
-        };
+            }]
+          })
+        });
         
-        const updatedSessions = { ...sessions, [id]: newSession };
-        localStorage.setItem('feynman_sessions', JSON.stringify(updatedSessions));
-        router.push(`/chat/${id}`);
+        const sessionData = await sessionRes.json();
+        if (sessionRes.ok && sessionData.id) {
+          setSessions(prev => ({ ...prev, [sessionData.id]: sessionData }));
+          // Note: you may need to map data.sessionId (the chromadb collection id) with DB session id if you need RAG context.
+          router.push(`/chat/${sessionData.id}`);
+        }
       }
       } catch (error: any) {
       console.error("Embedding failed", error);
@@ -362,6 +363,22 @@ export default function DashboardHome() {
                 {isEmbedding ? 'Generating Embeddings...' : 'Upload & Study PDF'}
               </button>
             </div>
+          </div>
+
+          {/* Quiz Mode Card */}
+          <div className={styles.newSessionCard} style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(245, 158, 11, 0.3)', boxShadow: '0 20px 40px rgba(0,0,0,0.3)', display: 'flex', flexDirection: 'column' }}>
+            <h2 style={{ fontSize: '1.2rem', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Target size={20} color="#f59e0b" /> Knowledge Quiz
+            </h2>
+            <p style={{ fontSize: '0.9rem', color: '#94a3b8', marginBottom: '16px', flex: 1 }}>
+              Test your mastery with a 10-question Duolingo-style quiz on any topic. Be careful, you only have 3 hearts!
+            </p>
+            <Link 
+              href="/quiz"
+              style={{ width: '100%', padding: '14px', background: 'rgba(245, 158, 11, 0.1)', color: '#fcd34d', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: '12px', fontSize: '1rem', fontWeight: 600, transition: 'all 0.2s', marginTop: 'auto', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+            >
+              Start Quiz Journey
+            </Link>
           </div>
 
         </div>

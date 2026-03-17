@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import styles from './Navbar.module.css';
-import { BrainCircuit, BookOpen, User, PlusCircle, TrendingUp, Home } from 'lucide-react';
+import { BrainCircuit, BookOpen, User, PlusCircle, TrendingUp, Home, Target } from 'lucide-react';
 
 export default function Navbar() {
   return (
@@ -21,6 +21,10 @@ export default function Navbar() {
           <Link href="/library" className={styles.navLink}>
             <BookOpen size={18} />
             <span>Library</span>
+          </Link>
+          <Link href="/quiz" className={styles.navLink}>
+            <Target size={18} />
+            <span>Quiz</span>
           </Link>
           <Link href="/dashboard" className={styles.navLink}>
             <TrendingUp size={18} />
