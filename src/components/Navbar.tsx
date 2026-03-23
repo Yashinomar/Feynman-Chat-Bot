@@ -27,8 +27,8 @@ export default function Navbar() {
             <span>Quiz</span>
           </Link>
           <Link href="/dashboard" className={styles.navLink}>
-            <TrendingUp size={18} />
-            <span>Achievements</span>
+            <User size={18} />
+            <span>Profile</span>
           </Link>
         </div>
 

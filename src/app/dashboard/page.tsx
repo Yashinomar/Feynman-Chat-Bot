@@ -3,10 +3,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, BrainCircuit, MessageSquare, TrendingUp, Award, Zap, Star, ShieldCheck, BookOpen, Trophy, Calendar } from 'lucide-react';
+import { ArrowLeft, BrainCircuit, MessageSquare, TrendingUp, Award, Zap, Star, ShieldCheck, BookOpen, Trophy, Calendar, LogOut, User } from 'lucide-react';
 import styles from './dashboard.module.css';
 import badgeStyles from './badges.module.css';
-import { useSession } from 'next-auth/react';
+import { useSession, signOut } from 'next-auth/react';
 import type { Session } from '../chat/[id]/page';
 
 export default function Dashboard() {
@@ -98,11 +98,26 @@ export default function Dashboard() {
   return (
     <div className={styles.container}>
       <header className={styles.header}>
-        <h1>Learning Analytics</h1>
+        <h1>Profile</h1>
         <Link href="/" className={styles.backBtn}>
           <ArrowLeft size={18} /> Back to Home
         </Link>
       </header>
+
+      <div className={styles.profileSection}>
+        <button onClick={() => signOut({ callbackUrl: '/login' })} className={styles.logoutBtn}>
+          <LogOut size={16} /> Logout
+        </button>
+        <div className={styles.profileAvatar}>
+          {authSession?.user?.image ? (
+            <img src={authSession.user.image} alt="Profile" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+          ) : (
+            <User size={48} />
+          )}
+        </div>
+        <h2 className={styles.profileName}>{authSession?.user?.name || 'Student'}</h2>
+        <p className={styles.profileEmail}>{authSession?.user?.email || ''}</p>
+      </div>
 
       {sessions.length === 0 ? (
         <div className={styles.emptyState}>
