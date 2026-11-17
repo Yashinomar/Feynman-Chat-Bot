@@ -1,36 +1,53 @@
 {
-  "name": "zonal-crab",
+  "name": "teachback-ai",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "admin:create": "node scripts/create-admin.mjs",
+    "dev": "next dev --webpack",
+    "build": "prisma generate && node scripts/copy-pdf-worker.mjs && next build --webpack",
+    "start": "node scripts/check-env.mjs && next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "prisma generate",
+    "db:migrate": "node scripts/migrate.mjs",
+    "postinstall": "prisma generate && node scripts/copy-pdf-worker.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.43.0",
+    "@huggingface/transformers": "^3.8.1",
     "@prisma/client": "^6.4.1",
-    "@xenova/transformers": "^2.17.2",
     "bcryptjs": "^3.0.3",
     "html2pdf.js": "^0.14.0",
     "lucide-react": "^0.577.0",
-    "next": "16.1.6",
+    "next": "16.4.5",
     "next-auth": "^5.0.0-beta.30",
     "pdfjs-dist": "^5.5.207",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
     "recharts": "^3.8.0",
-    "wavefile": "^11.0.0"
+    "wavefile": "^11.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
     "@types/bcryptjs": "^2.4.6",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.1.6",
+    "eslint-config-next": "16.4.5",
+    "jsdom": "^26.1.0",
     "prisma": "^6.4.1",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=22.13 <23 || >=24 <25"
+  },
+  "overrides": {
+    "sharp": "0.35.5"
   }
 }

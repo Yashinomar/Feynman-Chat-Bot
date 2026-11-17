@@ -1,27 +1,22 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
+import { z } from 'zod';
 import styles from './WikipediaModal.module.css';
+import StudyDialog from './StudyDialog';
 
 interface WikipediaModalProps {
     topic: string;
     onClose: () => void;
 }
 
-interface WikipediaData {
-    title: string;
-    extract_html: string;
-    thumbnail?: {
-        source: string;
-        width: number;
-        height: number;
-    };
-    content_urls: {
-        desktop: {
-            page: string;
-        };
-    };
-}
+const wikipediaSchema = z.object({
+    title: z.string().max(500), extract: z.string().max(20000),
+    type: z.string().optional(),
+    thumbnail: z.object({ source: z.string().url(), width: z.number(), height: z.number() }).optional(),
+});
+type WikipediaData = z.infer<typeof wikipediaSchema>;
 
 export default function WikipediaModal({ topic, onClose }: WikipediaModalProps) {
     const [data, setData] = useState<WikipediaData | null>(null);
@@ -29,13 +24,12 @@ export default function WikipediaModal({ topic, onClose }: WikipediaModalProps) 
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
+        const controller = new AbortController();
         const fetchWikipediaData = async () => {
-            setIsLoading(true);
-            setError(null);
             try {
                 // Use the Wikipedia REST API to get the summary
-                const response = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`);
-                
+                const response = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`, { signal: controller.signal });
+
                 if (!response.ok) {
                     if (response.status === 404) {
                         throw new Error(`Could not find a Wikipedia article for "${topic}".`);
@@ -43,65 +37,45 @@ export default function WikipediaModal({ topic, onClose }: WikipediaModalProps) 
                     throw new Error("Failed to fetch data from Wikipedia.");
                 }
 
-                const result: WikipediaData = await response.json();
-                
+                const result = wikipediaSchema.parse(await response.json());
+
                 // If it's a disambiguation page, the API might not give a good extract
-                if (result.extract_html && result.extract_html.includes('may refer to:')) {
+                if (result.type === 'disambiguation') {
                     throw new Error(`The topic "${topic}" is too broad (disambiguation page). Try a more specific topic.`);
                 }
 
                 setData(result);
             } catch (err: unknown) {
+                if (controller.signal.aborted) return;
                 if (err instanceof Error) {
                     setError(err.message);
                 } else {
                     setError('An unexpected error occurred.');
                 }
             } finally {
-                setIsLoading(false);
+                if (!controller.signal.aborted) setIsLoading(false);
             }
         };
 
         if (topic) {
             fetchWikipediaData();
         }
+        return () => controller.abort();
     }, [topic]);
 
-    // Handle escape key to close
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                onClose();
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [onClose]);
-
     return (
-        <div className={styles.overlay} onClick={onClose}>
-            <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-                <div className={styles.header}>
-                    <h2 className={styles.title}>
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                            <path d="M2 17L12 22L22 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                            <path d="M2 12L12 17L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                        {data?.title || 'Wikipedia'}
-                    </h2>
-                    <button className={styles.closeBtn} onClick={onClose} aria-label="Close modal" title="Close">
-                        &times;
-                    </button>
-                </div>
+        <StudyDialog title={data?.title || 'Wikipedia'} onDismiss={onClose} className={styles.learnDialog}>
+                <button type="button" className={styles.closeBtn} data-initial-focus onClick={onClose} aria-label="Close Wikipedia">
+                    &times;
+                </button>
 
                 {isLoading ? (
-                    <div className={styles.loadingState}>
+                    <div className={styles.loadingState} role="status">
                         <div className={styles.spinner}></div>
                         <p>Searching Wikipedia for &quot;{topic}&quot;...</p>
                     </div>
                 ) : error ? (
-                    <div className={styles.errorState}>
+                    <div className={styles.errorState} role="alert">
                         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <circle cx="12" cy="12" r="10"></circle>
                             <line x1="12" y1="8" x2="12" y2="12"></line>
@@ -112,22 +86,22 @@ export default function WikipediaModal({ topic, onClose }: WikipediaModalProps) 
                 ) : data ? (
                     <>
                         <div className={styles.content}>
-                            {data.thumbnail && (
+                            {data.thumbnail && new URL(data.thumbnail.source).hostname === 'upload.wikimedia.org' && new URL(data.thumbnail.source).protocol === 'https:' && (
                                 <div className={styles.thumbnailContainer}>
-                                    <img 
-                                        src={data.thumbnail.source} 
-                                        alt={data.title} 
-                                        className={styles.thumbnail} 
+                                    <Image unoptimized width={data.thumbnail.width} height={data.thumbnail.height}
+                                        src={data.thumbnail.source}
+                                        alt={data.title}
+                                        className={styles.thumbnail}
                                         loading="lazy"
                                     />
                                 </div>
                             )}
-                            <div dangerouslySetInnerHTML={{ __html: data.extract_html }} />
+                            <p>{data.extract}</p>
                         </div>
                         <div className={styles.footer}>
-                            <a 
-                                href={data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(topic)}`} 
-                                target="_blank" 
+                            <a
+                                href={`https://en.wikipedia.org/wiki/${encodeURIComponent(data.title)}`}
+                                target="_blank"
                                 rel="noopener noreferrer"
                                 className={styles.linkBtn}
                             >
@@ -141,7 +115,6 @@ export default function WikipediaModal({ topic, onClose }: WikipediaModalProps) 
                         </div>
                     </>
                 ) : null}
-            </div>
-        </div>
+        </StudyDialog>
     );
 }

@@ -2,33 +2,32 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, BrainCircuit, MessageSquare, TrendingUp, Award, Zap, Star, ShieldCheck, BookOpen, Trophy, Calendar, LogOut, User } from 'lucide-react';
 import styles from './dashboard.module.css';
 import badgeStyles from './badges.module.css';
 import { useSession, signOut } from 'next-auth/react';
-import type { Session } from '../chat/[id]/page';
+import { errorMessage, requestJson, studySessionsSchema, type StudySession as Session } from '@/lib/client-api';
 
 export default function Dashboard() {
   const router = useRouter();
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [isMounted, setIsMounted] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
   const { data: authSession, status } = useSession();
 
   useEffect(() => {
-    setIsMounted(true);
+    let active = true;
     if (status === 'unauthenticated') {
       router.push('/login');
     } else if (status === 'authenticated') {
-      fetch('/api/sessions')
-        .then(res => res.json())
-        .then(data => {
-          if (Array.isArray(data)) {
-            setSessions(data);
-          }
-        })
-        .catch(e => console.error("Failed to fetch sessions from DB", e));
+      requestJson('/api/sessions', studySessionsSchema)
+        .then(data => { if (active) setSessions(data); })
+        .catch(err => { if (active) setError(errorMessage(err)); })
+        .finally(() => { if (active) setIsLoading(false); });
     }
+    return () => { active = false; };
   }, [status, router]);
 
   const stats = useMemo(() => {
@@ -56,7 +55,7 @@ export default function Dashboard() {
 
   const recentActivity = useMemo(() => {
     return [...sessions]
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
       .slice(0, 5); // display last 5
   }, [sessions]);
 
@@ -93,10 +92,11 @@ export default function Dashboard() {
     ];
   }, [sessions]);
 
-  if (!isMounted) return null;
+  if (isLoading || status !== 'authenticated') return <p role="status">Loading your study history…</p>;
 
   return (
     <div className={styles.container}>
+      {error && <p role="alert">{error}</p>}
       <header className={styles.header}>
         <h1>Profile</h1>
         <Link href="/" className={styles.backBtn}>
@@ -110,7 +110,7 @@ export default function Dashboard() {
         </button>
         <div className={styles.profileAvatar}>
           {authSession?.user?.image ? (
-            <img src={authSession.user.image} alt="Profile" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+            <Image width={96} height={96} unoptimized src={authSession.user.image} alt="Profile" style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
           ) : (
             <User size={48} />
           )}

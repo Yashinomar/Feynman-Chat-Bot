@@ -15,6 +15,7 @@ export default function RegisterPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (new TextEncoder().encode(password).length > 72) { setError('Use a password of 12 or more characters and no more than 72 bytes.'); return; }
     setIsLoading(true);
     setError('');
 
@@ -32,7 +33,7 @@ export default function RegisterPage() {
       } else {
         router.push('/login');
       }
-    } catch (err) {
+    } catch {
       setError("An unexpected error occurred");
     } finally {
       setIsLoading(false);
@@ -63,6 +64,10 @@ export default function RegisterPage() {
               <label style={{ display: 'block', fontSize: '0.9rem', color: '#e2e8f0', marginBottom: '8px', fontWeight: 500 }}>Username</label>
               <input
                 type="text"
+                autoComplete="username"
+                minLength={3}
+                maxLength={32}
+                pattern="[a-zA-Z0-9_]{3,32}"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="Choose a username"
@@ -77,9 +82,12 @@ export default function RegisterPage() {
               <label style={{ display: 'block', fontSize: '0.9rem', color: '#e2e8f0', marginBottom: '8px', fontWeight: 500 }}>Password</label>
               <input
                 type="password"
+                autoComplete="new-password"
+                maxLength={72}
+                minLength={12}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Create a password"
+                placeholder="At least 12 characters"
                 required
                 style={{ width: '100%', padding: '14px', background: 'rgba(30, 41, 59, 0.8)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: 'white', outline: 'none', transition: 'all 0.2s', fontSize: '1rem' }}
                 onFocus={(e) => e.target.style.borderColor = '#10b981'}

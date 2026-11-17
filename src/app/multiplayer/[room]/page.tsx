@@ -1,372 +1,250 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { Send, Users, Activity, CheckCircle2, ArrowLeft, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import styles from './multiplayer.module.css';
 
-interface ChatMessage {
-  id: string;
-  sender: 'You' | 'Partner' | 'AI Tutor';
-  content: string;
+interface ChatMessage { id: string; sender: 'You' | 'Partner' | 'AI Tutor'; content: string }
+interface RoomState {
+  room: string; topic: string; gameMode: 'classic' | 'survival' | 'rush'; role: 'host' | 'guest';
+  hostOffer?: RTCSessionDescriptionInit; guestAnswer?: RTCSessionDescriptionInit;
+  hostIceCandidates: RTCIceCandidateInit[]; guestIceCandidates: RTCIceCandidateInit[];
+}
+const CONNECTED = 'Connected! Tutor is listening.';
+async function api<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, { ...init, cache: 'no-store' });
+  const data = await res.json();
+  if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'The request failed. Please try again.');
+  return data as T;
 }
 
 export default function MultiplayerRoom() {
-  const params = useParams();
-  const searchParams = useSearchParams();
-  
-  const room = (params.id || params.room as string); // Handle either dynamic var name
-  const mode = searchParams.get('mode'); // 'host' or 'guest'
-
+  const params = useParams<{ room: string }>();
+  const room = params.room;
   const [topic, setTopic] = useState('');
+  const [role, setRole] = useState<'host' | 'guest' | null>(null);
   const [status, setStatus] = useState('Setting things up...');
+  const [error, setError] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isAITyping, setIsAITyping] = useState(false);
-  
-  // Gamification State
-  const [gameMode, setGameMode] = useState<'classic'|'survival'|'rush'>('classic');
-  const [messagesLeft, setMessagesLeft] = useState(15);
-  const [timeLeft, setTimeLeft] = useState(180); // 3 minutes
-  const [isGameOver, setIsGameOver] = useState(false);
-
-  const pc = useRef<RTCPeerConnection | null>(null);
+  const [gameMode, setGameMode] = useState<'classic' | 'survival' | 'rush'>('classic');
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(0);
   const dataChannel = useRef<RTCDataChannel | null>(null);
-  const pollingInterval = useRef<NodeJS.Timeout | null>(null);
-  const processedIceCount = useRef(0);
-  const isSetupRef = useRef(false);
-  const hasNegotiated = useRef(false);
+  const processedMessages = useRef(new Set<string>());
+  const generationBusy = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const alive = useRef(true);
+  const messagesLeft = Math.max(0, 15 - messages.filter(message => message.sender !== 'AI Tutor').length);
+  const timeLeft = startedAt === null ? 180 : Math.max(0, 180 - Math.floor((now - startedAt) / 1_000));
+  const isGameOver = (gameMode === 'survival' && messagesLeft === 0) || (gameMode === 'rush' && timeLeft === 0);
 
-  // Auto-scroll chat
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]);
-
-  // Rush Timer Logic
-  useEffect(() => {
-    if (gameMode !== 'rush' || status !== 'Connected! Tutor is listening.' || isGameOver) return;
-    
-    const timer = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          setIsGameOver(true);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
+    if (gameMode !== 'rush' || startedAt === null) return;
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
-  }, [gameMode, status, isGameOver]);
+  }, [gameMode, startedAt]);
 
-  // WebRTC Setup
   useEffect(() => {
-    if (isSetupRef.current) return;
-    isSetupRef.current = true;
+    alive.current = true;
+    let stopped = false;
+    let peer: RTCPeerConnection | undefined;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let processedIce = 0;
+    let failures = 0;
+    const abort = new AbortController();
+    const signal = async (action: string, data: unknown) => api('/api/signaling', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: abort.signal,
+      body: JSON.stringify({ room, action, data }),
+    });
+    const fail = (cause: unknown) => {
+      if (stopped) return;
+      setError(cause instanceof Error ? cause.message : 'The connection failed. Try creating a new room.');
+    };
+    const append = (message: ChatMessage) => setMessages(previous => previous.some(item => item.id === message.id) ? previous : [...previous, message].slice(-500));
 
-    if (!room || !mode) {
-      setStatus('Invalid Room URL Configuration');
-      return;
-    }
-
-    const initWebRTC = async () => {
+    async function initialize() {
       try {
-        setStatus(mode === 'host' ? 'Waiting for partner to join...' : 'Connecting to host...');
-        
-        const peer = new RTCPeerConnection({
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
-        });
-        pc.current = peer;
-
-        peer.onicecandidate = async (e) => {
-          if (e.candidate) {
-            await fetch('/api/signaling', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ room, action: mode === 'host' ? 'host-ice' : 'guest-ice', data: e.candidate })
-            }).catch(console.error);
+        const initial = await api<RoomState>(`/api/signaling?room=${encodeURIComponent(room)}`, { signal: abort.signal });
+        if (stopped) return;
+        const isHost = initial.role === 'host';
+        setRole(initial.role);
+        setTopic(initial.topic);
+        setGameMode(initial.gameMode);
+        setStatus(isHost ? 'Waiting for partner to join...' : 'Connecting to host...');
+        append({ id: 'welcome', sender: 'AI Tutor', content: `Welcome! Take turns explaining ${initial.topic}. This room’s conversation is temporary and is not saved to your study history.` });
+        peer = new RTCPeerConnection({ iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+        ] });
+        const connection = peer;
+        connection.onconnectionstatechange = () => {
+          if (!stopped && ['failed', 'disconnected'].includes(connection.connectionState)) {
+            setStatus('Partner disconnected');
+            setError('The peer connection was lost. Create a new room to reconnect. Restrictive networks may need a TURN relay.');
           }
         };
-
-        const setupDataChannel = (dc: RTCDataChannel) => {
-          dc.onopen = () => {
-             setStatus('Connected! Tutor is listening.');
-             if (pollingInterval.current) clearInterval(pollingInterval.current);
+        connection.onicecandidate = (event) => {
+          if (event.candidate && !stopped) void signal(isHost ? 'host-ice' : 'guest-ice', event.candidate.toJSON()).catch(fail);
+        };
+        const attachChannel = (channel: RTCDataChannel) => {
+          dataChannel.current = channel;
+          channel.onopen = () => {
+            if (stopped) return;
+            setStatus(CONNECTED);
+            setError('');
+            if (isHost) {
+              const start = Date.now();
+              setStartedAt(start); setNow(start);
+              channel.send(JSON.stringify({ type: 'ready', startedAt: start }));
+            }
           };
-          dc.onclose = () => setStatus('Partner Disconnected');
-          dc.onmessage = (e) => {
-             const payload = JSON.parse(e.data);
-             // When receiving over network, sender maps perfectly ('Partner' or 'AI Tutor')
-             setMessages(prev => [...prev, payload]);
+          channel.onclose = () => { if (!stopped) setStatus('Partner disconnected'); };
+          channel.onerror = () => fail(new Error('The peer connection failed. Create a new room to reconnect.'));
+          channel.onmessage = (event: MessageEvent<unknown>) => {
+            if (stopped || typeof event.data !== 'string' || event.data.length > 12_000) return;
+            try {
+              const payload: unknown = JSON.parse(event.data);
+              if (!payload || typeof payload !== 'object') return;
+              if ('type' in payload && payload.type === 'ready' && !isHost && 'startedAt' in payload && typeof payload.startedAt === 'number' && Number.isFinite(payload.startedAt)) {
+                // Local elapsed time avoids trusting the peer's clock.
+                setStartedAt(Date.now()); setNow(Date.now()); return;
+              }
+              if (!('id' in payload) || typeof payload.id !== 'string' || payload.id.length > 64 ||
+                  !('content' in payload) || typeof payload.content !== 'string' || !payload.content.trim() || payload.content.length > 6_000 ||
+                  !('sender' in payload) || (payload.sender !== 'Partner' && !(payload.sender === 'AI Tutor' && !isHost))) return;
+              append({ id: payload.id, content: payload.content, sender: payload.sender });
+            } catch { fail(new Error('A message from your partner could not be read.')); }
           };
         };
-
-        if (mode === 'host') {
-          const dc = peer.createDataChannel('chat');
-          dataChannel.current = dc;
-          setupDataChannel(dc);
-
-          const offer = await peer.createOffer();
-          await peer.setLocalDescription(offer);
-          
-          await fetch('/api/signaling', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ room, action: 'host-offer', data: offer })
-          });
-
-          // Polling for Guest Answer
-          pollingInterval.current = setInterval(async () => {
-            try {
-              const res = await fetch(`/api/signaling?room=${room}`);
-              const data = await res.json();
-              if (data.topic) setTopic(prev => prev || data.topic);
-              if (data.gameMode) setGameMode(prev => (prev === 'classic' && data.gameMode !== 'classic') ? data.gameMode : prev);
-
-              if (data.guestAnswer && peer.signalingState === 'have-local-offer' && !hasNegotiated.current) {
-                hasNegotiated.current = true;
-                await peer.setRemoteDescription(new RTCSessionDescription(data.guestAnswer));
-              }
-
-              if (peer.remoteDescription && data.guestIceCandidates && data.guestIceCandidates.length > processedIceCount.current) {
-                for (let i = processedIceCount.current; i < data.guestIceCandidates.length; i++) {
-                  await peer.addIceCandidate(new RTCIceCandidate(data.guestIceCandidates[i]))
-                    .catch(e => console.error("Error adding ice candidate", e));
-                }
-                processedIceCount.current = data.guestIceCandidates.length;
-              }
-            } catch (err) {
-               console.error('Signaling error', err);
-            }
-          }, 2000);
-
-        } else if (mode === 'guest') {
-          peer.ondatachannel = (e) => {
-            dataChannel.current = e.channel;
-            setupDataChannel(e.channel);
-          };
-
-          // Polling for Host Offer
-          pollingInterval.current = setInterval(async () => {
-            try {
-              const res = await fetch(`/api/signaling?room=${room}`);
-              const data = await res.json();
-              
-              if (data.topic) setTopic(prev => prev || data.topic);
-              if (data.gameMode) setGameMode(prev => (prev === 'classic' && data.gameMode !== 'classic') ? data.gameMode : prev);
-
-              if (data.hostOffer && peer.signalingState === 'stable' && !hasNegotiated.current) {
-                hasNegotiated.current = true;
-                await peer.setRemoteDescription(new RTCSessionDescription(data.hostOffer));
-                const answer = await peer.createAnswer();
-                await peer.setLocalDescription(answer);
-                
-                await fetch('/api/signaling', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ room, action: 'guest-answer', data: answer })
-                });
-              }
-
-              if (peer.remoteDescription && data.hostIceCandidates && data.hostIceCandidates.length > processedIceCount.current) {
-                for (let i = processedIceCount.current; i < data.hostIceCandidates.length; i++) {
-                  await peer.addIceCandidate(new RTCIceCandidate(data.hostIceCandidates[i]))
-                    .catch(e => console.error("Error adding ice candidate", e));
-                }
-                processedIceCount.current = data.hostIceCandidates.length;
-              }
-            } catch (err) {
-               console.error('Signaling error', err);
-            }
-          }, 2000);
+        if (isHost) {
+          if (initial.hostOffer) throw new Error('This room was already connected. Create a new room to reconnect.');
+          attachChannel(connection.createDataChannel('chat'));
+          const offer = await connection.createOffer();
+          if (stopped) return;
+          await connection.setLocalDescription(offer);
+          await signal('host-offer', offer);
+        } else {
+          if (initial.guestAnswer) throw new Error('This room was already connected. Ask your partner for a new room.');
+          connection.ondatachannel = event => attachChannel(event.channel);
         }
-      } catch (err) {
-        console.error("WebRTC Init Error:", err);
-        setStatus('Connection Error');
-      }
-    };
-
-    initWebRTC();
-
-    return () => {
-      if (pollingInterval.current) clearInterval(pollingInterval.current);
-      if (dataChannel.current) dataChannel.current.close();
-      if (pc.current) pc.current.close();
-    };
-  }, [room, mode]);
-
-  // Initial Welcome Message
-  useEffect(() => {
-    if (topic && messages.length === 0) {
-      setMessages([{
-        id: '0',
-        sender: 'AI Tutor',
-        content: `Welcome to the multiplayer room. Today you’re both working on **${topic}** — take turns explaining it and I’ll keep an eye on how clear things are.`
-      }]);
+        const poll = async () => {
+          if (stopped || connection.connectionState === 'closed') return;
+          try {
+            const state = await api<RoomState>(`/api/signaling?room=${encodeURIComponent(room)}`, { signal: abort.signal });
+            if (stopped) return;
+            if (isHost && state.guestAnswer && !connection.remoteDescription && connection.signalingState === 'have-local-offer') {
+              await connection.setRemoteDescription(state.guestAnswer);
+            } else if (!isHost && state.hostOffer && !connection.remoteDescription) {
+              await connection.setRemoteDescription(state.hostOffer);
+              const answer = await connection.createAnswer();
+              await connection.setLocalDescription(answer);
+              await signal('guest-answer', answer);
+            }
+            const candidates = isHost ? state.guestIceCandidates : state.hostIceCandidates;
+            if (connection.remoteDescription) {
+              while (processedIce < candidates.length) {
+                const candidate = candidates[processedIce];
+                await connection.addIceCandidate(candidate);
+                processedIce++;
+              }
+            }
+            failures = 0;
+          } catch (cause) {
+            failures++;
+            fail(cause);
+            if (failures >= 3) { setStatus('Connection unavailable'); return; }
+          }
+          // Continue trickle ICE after onopen; candidate gathering may still be active.
+          if (!stopped) pollTimer = setTimeout(() => { void poll(); }, connection.connectionState === 'connected' ? 10_000 : 2_000);
+        };
+        if (!stopped) void poll();
+      } catch (cause) { fail(cause); if (!stopped) setStatus('Connection unavailable'); }
     }
-  }, [topic, messages.length]);
-
-  // Handle AI Trigger (Only Host calls the API to avoid duplicate processing)
-  useEffect(() => {
-    const triggerAI = async () => {
-      if (mode !== 'host' || messages.length === 0 || isAITyping) return;
-      
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg.sender === 'You' || lastMsg.sender === 'Partner') {
-        setIsAITyping(true);
-        
-        try {
-          // Construct the perspective accurately
-          const apiMessages = messages.map(m => ({
-            role: m.sender === 'AI Tutor' ? 'ai' : 'user',
-            content: m.sender === 'Partner' ? `(My Peer says): ${m.content}` : `(Host says): ${m.content}`
-          }));
-
-          const response = await fetch('/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: apiMessages, topic: topic || 'General Science', gameMode })
-          });
-
-          const data = await response.json();
-          const aiMsg: ChatMessage = { id: Date.now().toString(), sender: 'AI Tutor', content: data.reply };
-          
-          setMessages(prev => [...prev, aiMsg]);
-          
-          // Fanout AI response to guest
-          if (dataChannel.current?.readyState === 'open') {
-            dataChannel.current.send(JSON.stringify(aiMsg));
-          }
-        } catch (error) {
-          console.error("AI Error:", error);
-        } finally {
-          setIsAITyping(false);
-        }
-      }
+    void initialize();
+    return () => {
+      stopped = true; alive.current = false; abort.abort();
+      if (pollTimer) clearTimeout(pollTimer);
+      dataChannel.current?.close(); dataChannel.current = null;
+      peer?.close();
     };
+  }, [room]);
 
-    triggerAI();
-  }, [messages, mode, topic, isAITyping]);
+  useEffect(() => {
+    const pending = messages.findLast(message => message.sender !== 'AI Tutor' && !processedMessages.current.has(message.id));
+    if (role !== 'host' || !pending || generationBusy.current) return;
+    processedMessages.current.add(pending.id);
+    generationBusy.current = true;
+    async function reply() {
+      setIsAITyping(true);
+      try {
+        const data = await api<{ reply: string; score: number }>('/api/chat', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId: room, requestId: crypto.randomUUID(), messages: messages.slice(0, messages.findIndex(message => message.id === pending!.id) + 1).slice(-20).map(message => ({
+            role: message.sender === 'AI Tutor' ? 'ai' : 'user',
+            content: message.sender === 'AI Tutor' ? message.content : `${message.sender === 'Partner' ? 'Partner' : 'Host'}: ${message.content}`,
+          })) }),
+        });
+        if (!alive.current) return;
+        const response: ChatMessage = { id: crypto.randomUUID(), sender: 'AI Tutor', content: data.reply };
+        setMessages(previous => [...previous, response].slice(-500));
+        if (dataChannel.current?.readyState === 'open') dataChannel.current.send(JSON.stringify(response));
+        else setError('The tutor replied, but your partner disconnected before the reply could be shared.');
+      } catch (cause) {
+        if (alive.current) setError(cause instanceof Error ? cause.message : 'The tutor could not respond. Send your next explanation to try again.');
+      } finally {
+        generationBusy.current = false;
+        if (alive.current) setIsAITyping(false);
+      }
+    }
+    void reply();
+  }, [messages, role, room, isAITyping]);
 
   const handleSend = () => {
-    if (!input.trim() || status !== 'Connected! Tutor is listening.' || !dataChannel.current || isGameOver) return;
-    
-    if (gameMode === 'survival') {
-      if (messagesLeft <= 0) {
-        setIsGameOver(true);
-        return;
-      }
-      setMessagesLeft(prev => prev - 1);
-    }
-    
-    // The message is "from Me" locally
-    const myMsg: ChatMessage = { id: Date.now().toString(), sender: 'You', content: input };
-    setMessages(prev => [...prev, myMsg]);
-    
-    // Send to partner over WebRTC data channel as "Partner"
-    const networkMsg: ChatMessage = { ...myMsg, sender: 'Partner' };
-    dataChannel.current.send(JSON.stringify(networkMsg));
-    
-    setInput('');
+    const content = input.trim();
+    if (!content || content.length > 5_900 || dataChannel.current?.readyState !== 'open' || isGameOver) return;
+    const message: ChatMessage = { id: crypto.randomUUID(), sender: 'You', content };
+    try {
+      if (dataChannel.current.bufferedAmount > 64_000) throw new Error('Your connection is busy. Wait a moment before sending.');
+      dataChannel.current.send(JSON.stringify({ ...message, sender: 'Partner' }));
+      setMessages(previous => [...previous, message].slice(-500)); setInput(''); setError('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Your message could not be sent.'); }
   };
 
   return (
     <div className={styles.container}>
       <header className={styles.header}>
         <div className={styles.roomInfo}>
-          <Link href="/" className={styles.backBtn}>
-            <ArrowLeft size={18} /> Exit Multiplayer
-          </Link>
-          <div className={styles.roomBadge}>
-            Room Code: {room}
-          </div>
+          <Link href="/" className={styles.backBtn}><ArrowLeft size={18} /> Exit Multiplayer</Link>
+          <div className={styles.roomBadge} style={{ overflowWrap: 'anywhere' }}>Room Code: {room}</div>
         </div>
-        <div className={`${styles.statusIndicator} ${status.includes('Connected') ? styles.connected : styles.waiting}`}>
-          {status.includes('Waiting') || status.includes('Connecting') ? <Activity size={18} className="animate-spin" /> : <CheckCircle2 size={18} />}
-          {status}
+        <div className={`${styles.statusIndicator} ${status === CONNECTED ? styles.connected : styles.waiting}`}>
+          {status === CONNECTED ? <CheckCircle2 size={18} /> : <Activity size={18} />}{status}
         </div>
       </header>
-
-      {/* Gamification Banner */}
-      {gameMode !== 'classic' && status === 'Connected! Tutor is listening.' && (
-        <div style={{ background: gameMode === 'survival' ? 'rgba(220, 38, 38, 0.1)' : 'rgba(234, 179, 8, 0.1)', padding: '12px 24px', display: 'flex', justifyContent: 'center', alignItems: 'center', borderBottom: `1px solid ${gameMode === 'survival' ? 'rgba(220, 38, 38, 0.3)' : 'rgba(234, 179, 8, 0.3)'}` }}>
-          {gameMode === 'survival' && (
-            <div style={{ color: '#f87171', fontWeight: 700, fontSize: '1.1rem', letterSpacing: '1px' }}>
-              {isGameOver ? '💀 GAME OVER: MESSAGES DEPLETED' : `⚔️ SURVIVAL MODE: ${messagesLeft} Messages Remaining`}
-            </div>
-          )}
-          {gameMode === 'rush' && (
-            <div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '400px', gap: '8px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', color: timeLeft > 30 ? '#facc15' : '#f87171', fontWeight: 700, fontSize: '1.1rem' }}>
-                <span>⚡ RUSH MODE</span>
-                <span>{Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}</span>
-              </div>
-              <div style={{ height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${(timeLeft / 180) * 100}%`, background: timeLeft > 30 ? '#facc15' : '#ef4444', transition: 'width 1s linear, background 0.3s' }} />
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
+      {error && <p role="alert" style={{ color: '#fca5a5', padding: '12px 24px' }}>{error}</p>}
+      {gameMode !== 'classic' && status === CONNECTED && <div style={{ textAlign: 'center', padding: '12px', color: '#facc15' }}>
+        {gameMode === 'survival' ? (isGameOver ? 'Game over: all explanations used.' : `${messagesLeft} shared explanations remaining`)
+          : `Rush mode: ${Math.floor(timeLeft / 60)}:${(timeLeft % 60).toString().padStart(2, '0')}${isGameOver ? ' — time is up' : ''}`}
+      </div>}
       <main className={styles.mainPanel}>
         <div className={styles.chatWindow}>
-          {messages.map(m => (
-            <div key={m.id} className={`${styles.messageRow} ${m.sender === 'You' ? styles.you : m.sender === 'Partner' ? styles.partner : styles.tutor}`}>
-              <div className={styles.label}>
-                {m.sender === 'Partner' ? <Users size={12} style={{display:'inline', marginRight:'4px'}}/> : null}
-                {m.sender}
-              </div>
-              <div className={styles.messageBubble}>
-                {m.content}
-              </div>
-            </div>
-          ))}
-          {isAITyping && (
-            <div className={`${styles.messageRow} ${styles.tutor}`}>
-              <div className={styles.label}>AI Tutor</div>
-              <div className={styles.messageBubble} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Loader2 size={14} className="animate-spin" /> Grading explanations...
-              </div>
-            </div>
-          )}
+          {messages.map(message => <div key={message.id} className={`${styles.messageRow} ${message.sender === 'You' ? styles.you : message.sender === 'Partner' ? styles.partner : styles.tutor}`}>
+            <div className={styles.label}>{message.sender === 'Partner' && <Users size={12} />} {message.sender}</div>
+            <div className={styles.messageBubble}>{message.content}</div>
+          </div>)}
+          {isAITyping && <div className={`${styles.messageRow} ${styles.tutor}`}><div className={styles.label}>AI Tutor</div><div className={styles.messageBubble}><Loader2 size={14} /> Grading explanations...</div></div>}
           <div ref={messagesEndRef} />
         </div>
-
         <div className={styles.inputArea}>
-          <input
-            type="text"
-            className={styles.inputField}
-            placeholder={
-              isGameOver ? (gameMode === 'survival' ? 'Game Over: No messages left.' : 'Game Over: Time is up!') :
-              status === 'Connected! Tutor is listening.' ? 'Type your explanation here to the Tutor...' : 
-              'Waiting for connection...'
-            }
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            disabled={status !== 'Connected! Tutor is listening.' || isGameOver}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-          />
-          <button 
-            className={styles.sendBtn} 
-            onClick={handleSend}
-            disabled={!input.trim() || status !== 'Connected! Tutor is listening.' || isGameOver}
-          >
-            <Send size={18} />
-          </button>
+          <input type="text" className={styles.inputField} maxLength={5_900}
+            placeholder={isGameOver ? 'This game has ended. Start another room to continue.' : status === CONNECTED ? `Explain ${topic} to the tutor...` : 'Waiting for connection...'}
+            value={input} onChange={event => setInput(event.target.value)} disabled={status !== CONNECTED || isGameOver}
+            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); handleSend(); } }} />
+          <button className={styles.sendBtn} onClick={handleSend} disabled={!input.trim() || status !== CONNECTED || isGameOver} aria-label="Send explanation"><Send size={18} /></button>
         </div>
       </main>
     </div>

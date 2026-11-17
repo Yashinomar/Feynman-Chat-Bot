@@ -3,328 +3,262 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import { z } from 'zod';
 import styles from '../../page.module.css';
+import feynmanStyles from './feynman.module.css';
 import Sidebar from '../../../components/Sidebar';
-import ChatArea, { Message } from '../../../components/ChatArea';
-import { Send, FileText, Download, Award, BrainCircuit, Share2, CornerDownLeft, Network } from 'lucide-react';
-import html2pdf from 'html2pdf.js';
+import ChatArea from '../../../components/ChatArea';
+import DeleteSessionDialog from '@/components/DeleteSessionDialog';
+import LiveLearningExperience from '@/components/learning-path/LiveLearningExperience';
+import { checkpointReportSchema } from '@/lib/checkpoint-report';
+import { errorMessage, jsonBody, RequestError, requestJson, studySessionSchema, type StudySession } from '@/lib/client-api';
 
-export interface Session {
-  id: string;
-  topic: string;
-  createdAt: number;
-  updatedAt: number;
-  messages: Message[];
-  status: 'active' | 'completed';
-  masteryScore: number;
-  reviewDate?: number;
-  interval?: number;
-  repetition?: number;
-  efactor?: number;
-  activeCorrection?: string | null;
-  isRagSession?: boolean;
-  studentLevel?: 'kid' | 'highschool' | 'professional';
-  studentBehavior?: 'curious' | 'skeptical' | 'enthusiastic' | 'distracted';
-}
+const chatResultSchema = z.object({
+  session: studySessionSchema, reply: z.string(), score: z.number().min(0).max(100),
+  sources: z.array(z.object({ id: z.string(), position: z.number(), text: z.string() })).optional(),
+});
+const factCheckSchema = z.object({ status: z.enum(['accurate', 'inaccurate', 'unverified']), correction: z.string().optional(), reason: z.string().optional() });
+const learningPathSchema = z.array(z.object({
+  title: z.string().trim().min(3).max(80),
+  objective: z.string().trim().min(8).max(220),
+}).strict()).min(4).max(6);
+const checkpointResultSchema = z.object({
+  session: studySessionSchema,
+  report: checkpointReportSchema,
+  replayed: z.boolean().optional(),
+}).strict();
 
-// SuperMemo-2 SRS Algorithm
-export function calculateNextReview(score: number, repetition = 0, efactor = 2.5, interval = 0) {
-  let grade = 0;
-  if (score >= 90) grade = 5;
-  else if (score >= 80) grade = 4;
-  else if (score >= 60) grade = 3;
-  else if (score >= 40) grade = 2;
-  else if (score >= 20) grade = 1;
-
-  let nextInterval;
-  let nextRepetition;
-  let nextEfactor;
-
-  if (grade >= 3) {
-    if (repetition === 0) nextInterval = 1;
-    else if (repetition === 1) nextInterval = 6;
-    else nextInterval = Math.round(interval * efactor);
-    nextRepetition = repetition + 1;
-  } else {
-    nextRepetition = 0;
-    nextInterval = 1;
-  }
-
-  nextEfactor = efactor + (0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02));
-  if (nextEfactor < 1.3) nextEfactor = 1.3;
-
-  const nextReviewDate = Date.now() + (nextInterval * 24 * 60 * 60 * 1000);
-
-  return { interval: nextInterval, repetition: nextRepetition, efactor: nextEfactor, reviewDate: nextReviewDate };
+function hasValidCheckpointReport(saved: StudySession) {
+  if (!saved.checkpointReport || !saved.learningPath) return false;
+  try {
+    const report = checkpointReportSchema.safeParse(JSON.parse(saved.checkpointReport));
+    const path = learningPathSchema.safeParse(JSON.parse(saved.learningPath));
+    return report.success && path.success && report.data.firstReview.stepIndex < path.data.length;
+  } catch { return false; }
 }
 
 export default function ChatSession() {
-  const params = useParams();
+  const params = useParams<{ id: string }>();
   const router = useRouter();
-  const currentSessionId = params.id as string;
-
-  const [sessions, setSessions] = useState<Record<string, Session>>({});
-  const [isLoading, setIsLoading] = useState(false);
-  const [newTopic, setNewTopic] = useState('');
-  const [isMounted, setIsMounted] = useState(false);
-  const [showHint, setShowHint] = useState(false);
-  const [hintMessage, setHintMessage] = useState<string | null>(null);
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentSessionId = params.id;
+  const [session, setSession] = useState<StudySession | null>(null);
+  const [loadedId, setLoadedId] = useState<string | null>(null);
+  const [isSending, setIsSending] = useState(false);
+  const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [factCheck, setFactCheck] = useState<z.infer<typeof factCheckSchema> | null>(null);
+  const [sources, setSources] = useState<z.infer<typeof chatResultSchema>['sources']>([]);
+  const pendingTurn = useRef<{ sessionId: string; content: string; requestId: string; expectedVersion: number } | null>(null);
+  const pendingCheckpoint = useRef<{ sessionId: string; content: string; requestId: string; expectedVersion: number } | null>(null);
+  const inFlight = useRef(false);
+  const mainContentRef = useRef<HTMLElement>(null);
+  const factCheckGeneration = useRef(0);
+  const factCheckAbort = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    setIsMounted(true);
-    fetch('/api/sessions')
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          const fetchedSessions: Record<string, Session> = {};
-          data.forEach((s: any) => {
-            fetchedSessions[s.id] = s;
-          });
-          setSessions(fetchedSessions);
-        }
+    let active = true;
+    const controller = new AbortController();
+    factCheckAbort.current = controller;
+    requestJson(`/api/sessions/${currentSessionId}`, studySessionSchema)
+      .then(saved => {
+        if (active) { setSession(saved); setError(''); setSources([]); setFactCheck(null); }
       })
-      .catch(e => console.error("Failed to fetch sessions", e));
-  }, []);
+      .catch(err => { if (active) setError(errorMessage(err)); })
+      .finally(() => { if (active) setLoadedId(currentSessionId); });
+    return () => { active = false; controller.abort(); };
+  }, [currentSessionId]);
 
-  const handleDeleteSession = async (e: React.MouseEvent | null, id: string) => {
-    if (e) {
-      e.stopPropagation();
-    }
-
+  const dismissCorrection = async () => {
+    if (!session || session.id !== currentSessionId || inFlight.current) return;
+    inFlight.current = true;
+    setIsSending(true);
+    setError('');
+    ++factCheckGeneration.current;
+    const signal = factCheckAbort.current?.signal;
     try {
-      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-      setSessions(prev => {
-        const newSessions = { ...prev };
-        delete newSessions[id];
-        return newSessions;
+      const saved = await requestJson(`/api/sessions/${currentSessionId}`, studySessionSchema, {
+        ...jsonBody({ activeCorrection: null, expectedVersion: session.version }), method: 'PUT', signal,
       });
-
-      if (currentSessionId === id) {
-        router.push('/');
+      if (!signal?.aborted) {
+        setSession(saved);
+        setFactCheck(null);
       }
     } catch (err) {
-      console.error("Failed to delete session", err);
+      if (signal?.aborted) return;
+      if (err instanceof RequestError && err.status === 409) {
+        try {
+          const refreshed = await requestJson(`/api/sessions/${currentSessionId}`, studySessionSchema, { signal });
+          if (!signal?.aborted) {
+            setSession(refreshed);
+            setFactCheck(null);
+          }
+        } catch { /* Preserve the current correction when the refresh fails. */ }
+      }
+      if (!signal?.aborted) setError(errorMessage(err));
     }
+    finally { inFlight.current = false; setIsSending(false); }
   };
 
-  const handleSendMessage = async (text: string) => {
-    if (!currentSessionId) return;
-
-    const session = sessions[currentSessionId];
-    if (!session) return;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: text
-    };
-
-    const newMessages = [...session.messages, userMessage];
-
-    setSessions(prev => ({
-      ...prev,
-      [currentSessionId]: {
-        ...prev[currentSessionId],
-        messages: newMessages,
-        updatedAt: Date.now()
-      }
-    }));
-
-    setIsLoading(true);
-
+  const handleSendMessage = async (text: string): Promise<boolean> => {
+    if (!session || session.id !== currentSessionId || inFlight.current || deleteSessionId === currentSessionId) return false;
+    const content = text.trim();
+    if (!content || content.length > 6000) { setError('Please use between 1 and 6,000 characters.'); return false; }
+    inFlight.current = true;
+    setIsSending(true);
+    setError('');
+    setFactCheck(null);
+    const generation = ++factCheckGeneration.current;
+    const signal = factCheckAbort.current?.signal;
+    if (!pendingTurn.current || pendingTurn.current.sessionId !== currentSessionId || pendingTurn.current.content !== content) {
+      pendingTurn.current = { sessionId: currentSessionId, content, requestId: crypto.randomUUID(), expectedVersion: session.version };
+    }
+    const turn = pendingTurn.current;
     try {
-      await fetch(`/api/sessions/${currentSessionId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'user', content: text })
-      });
-
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: newMessages,
-          topic: session.topic,
-          sessionId: currentSessionId,
-          isRagSession: session.isRagSession,
-          studentLevel: session.studentLevel || 'highschool',
-          studentBehavior: session.studentBehavior || 'curious'
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Network response was not ok');
-      }
-
-      const data = await response.json();
-
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'ai',
-        content: data.reply
-      };
-
-      await fetch(`/api/sessions/${currentSessionId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'ai', content: data.reply })
-      });
-
-      setSessions(prev => {
-        const currentSession = prev[currentSessionId];
-        const newScore = data.score !== undefined ? data.score : currentSession.masteryScore;
-        
-        // Calculate new spaced repetition intervals when the score updates
-        let srsUpdates = {};
-        if (data.score !== undefined) {
-          srsUpdates = calculateNextReview(
-            newScore, 
-            currentSession.repetition, 
-            currentSession.efactor, 
-            currentSession.interval
-          );
-        }
-
-        return {
-          ...prev,
-          [currentSessionId]: {
-            ...currentSession,
-            ...srsUpdates,
-            messages: [...currentSession.messages, aiMessage],
-            masteryScore: newScore,
-            updatedAt: Date.now()
-          }
-        };
-      });
-
-      if (data.score !== undefined) {
-        const srsUpdates = calculateNextReview(
-          data.score, 
-          session.repetition, 
-          session.efactor, 
-          session.interval
-        );
-        fetch(`/api/sessions/${currentSessionId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ masteryScore: data.score, ...srsUpdates })
-        }).catch(e => console.error(e));
-      }
-
-      if (currentSessionId && currentSession) {
-        fetch('/api/factcheck', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            topic: currentSession.topic,
-            latestMessage: text
-          })
+      const result = await requestJson('/api/chat', chatResultSchema, jsonBody(turn));
+      if (signal?.aborted) return false;
+      // Only a committed server response may change the conversation or mastery score.
+      setSession(result.session);
+      setSources(result.sources ?? []);
+      pendingTurn.current = null;
+      const committedVersion = turn.expectedVersion + 1;
+      if (result.session.version === committedVersion) {
+        void requestJson('/api/factcheck', factCheckSchema, {
+          ...jsonBody({ sessionId: turn.sessionId, requestId: turn.requestId, expectedVersion: committedVersion }),
+          signal,
         })
-      .then(res => res.json())
-      .then(correctionData => {
-        if (correctionData && correctionData.isAccurate === false && correctionData.correction) {
-          setSessions(prev => {
-            const snap = { ...prev };
-            if (snap[currentSessionId]) {
-              snap[currentSessionId].activeCorrection = correctionData.correction;
-            }
-            return snap;
+          .then(check => { if (!signal?.aborted && factCheckGeneration.current === generation) setFactCheck(check); })
+          .catch(err => {
+            if (signal?.aborted || factCheckGeneration.current !== generation || (err instanceof RequestError && err.status === 409)) return;
+            setFactCheck({ status: 'unverified', reason: 'Fact-checking is temporarily unavailable.' });
           });
-        }
-      })
-      .catch(err => console.error("Fact-checker failed silently:", err));
       }
-
-    } catch (error: any) {
-      console.error("Failed to send message:", error);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'ai',
-        content: `I wasn’t able to handle that request properly: ${error.message || 'something went wrong on my side.'}`
-      };
-      setSessions(prev => {
-        const currentSession = prev[currentSessionId];
-        return {
-          ...prev,
-          [currentSessionId]: {
-            ...currentSession,
-            messages: [...currentSession.messages, errorMessage],
-            updatedAt: Date.now()
-          }
-        };
-      });
+      return true;
+    } catch (err) {
+      if (signal?.aborted) return false;
+      if (err instanceof RequestError && err.status === 409) {
+        // Another tab changed this session. Keep the draft, but use the new version on retry.
+        pendingTurn.current = null;
+        try { setSession(await requestJson(`/api/sessions/${currentSessionId}`, studySessionSchema)); }
+        catch { /* Preserve the current saved view and report the original conflict. */ }
+      }
+      setError(`${errorMessage(err)} Your draft has been kept. Retry to confirm it was saved.`);
+      return false;
     } finally {
-      setIsLoading(false);
+      inFlight.current = false;
+      setIsSending(false);
     }
   };
 
-  if (!isMounted) return null;
+  const handleSubmitCheckpoint = async (text: string): Promise<boolean> => {
+    if (!session || session.id !== currentSessionId || session.status !== 'checkpoint' || inFlight.current || deleteSessionId === currentSessionId) return false;
+    const content = text.trim();
+    if (!content || content.length > 6000) { setError('Please use between 1 and 6,000 characters.'); return false; }
+    inFlight.current = true;
+    setIsSending(true);
+    setError('');
+    const signal = factCheckAbort.current?.signal;
+    if (!pendingCheckpoint.current || pendingCheckpoint.current.sessionId !== currentSessionId || pendingCheckpoint.current.content !== content) {
+      pendingCheckpoint.current = { sessionId: currentSessionId, content, requestId: crypto.randomUUID(), expectedVersion: session.version };
+    }
+    const submission = pendingCheckpoint.current;
+    try {
+      const result = await requestJson(`/api/sessions/${currentSessionId}/checkpoint`, checkpointResultSchema, { ...jsonBody(submission), signal });
+      if (signal?.aborted) return false;
+      setSession(result.session);
+      pendingCheckpoint.current = null;
+      return true;
+    } catch (err) {
+      if (signal?.aborted) return false;
+      if (err instanceof RequestError && err.status === 409) {
+        try {
+          const refreshed = await requestJson(`/api/sessions/${currentSessionId}`, studySessionSchema, { signal });
+          if (signal?.aborted) return false;
+          setSession(refreshed);
+          if (refreshed.status === 'checkpoint' && pendingCheckpoint.current?.content === content) {
+            pendingCheckpoint.current.expectedVersion = refreshed.version;
+          } else if (refreshed.status === 'completed' && hasValidCheckpointReport(refreshed)) {
+            pendingCheckpoint.current = null;
+            setError('');
+            return true;
+          }
+        } catch { /* Keep the saved view and retained draft when refresh also fails. */ }
+      }
+      setError(`${errorMessage(err)} Your checkpoint draft has been kept.`);
+      return false;
+    } finally {
+      inFlight.current = false;
+      setIsSending(false);
+    }
+  };
 
-  const currentSession = currentSessionId ? sessions[currentSessionId] : null;
-
-  if (!currentSession) {
-    return (
-      <div className={styles.homeContainer} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', flexDirection: 'column' }}>
-        <h2>Session Not Found</h2>
-        <p style={{ color: '#64748b', marginBottom: '20px' }}>This study session may have been deleted or doesn't exist.</p>
-        <Link href="/" className="button-primary" style={{ textDecoration: 'none' }}>
-          Return to Dashboard
-        </Link>
-      </div>
-    );
-  }
-
+  if (loadedId !== currentSessionId) return <p role="status">Loading your study session…</p>;
+  if (!session || session.id !== currentSessionId) return (
+    <main className={styles.homeContainer}>
+      <h2>Unable to open this session</h2>
+      <p role="alert">{error || 'This session was deleted or is not available to your account.'}</p>
+      <Link href="/">Return home</Link>
+    </main>
+  );
+  const parsedPath = (() => {
+    if (!session.learningPath) return null;
+    try { return learningPathSchema.safeParse(JSON.parse(session.learningPath)); }
+    catch { return null; }
+  })();
+  const learningPath = parsedPath?.success ? parsedPath.data : null;
+  const parsedReport = (() => {
+    if (!session.checkpointReport) return null;
+    try { return checkpointReportSchema.safeParse(JSON.parse(session.checkpointReport)); }
+    catch { return null; }
+  })();
+  const checkpointReport = parsedReport?.success && learningPath && parsedReport.data.firstReview.stepIndex < learningPath.length ? parsedReport.data : null;
+  const reportUnavailable = !!session.checkpointReport && !checkpointReport;
+  const currentStep = session.pathIndex ?? 0;
+  const correction = factCheck?.status === 'inaccurate' ? factCheck.correction : factCheck ? null : session.activeCorrection;
+  const levelLabel = session.studentLevel === 'kid' ? 'Lower Primary' : session.studentLevel === 'professional' ? 'Professional' : 'High School';
+  const showChat = session.status === 'active' || (session.status === 'completed' && !checkpointReport);
+  const courseMaterial = (() => {
+    try { return z.object({ sessions: z.array(z.object({ title: z.string(), theory: z.string(), example: z.string() })) }).parse(JSON.parse(session.courseContext ?? 'null')).sessions; }
+    catch { return undefined; }
+  })();
   return (
-    <div className={styles.container}>
-      <Sidebar
-        topic={currentSession.topic}
-        masteryScore={currentSession.masteryScore}
-        messages={currentSession.messages}
-        onGoHome={() => router.push('/')}
-        onDeleteSession={() => handleDeleteSession(null, currentSessionId!)}
-      />
-      <main className={styles.mainContent}>
-        {currentSession.activeCorrection && (
-          <div className={styles.correctionBanner}>
-            <div className={styles.correctionIcon}>🚨 Fact Check</div>
-            <p>{currentSession.activeCorrection}</p>
-            <button 
-              className={styles.dismissCorrection} 
-              onClick={() => {
-                setSessions(prev => {
-                  const snap = { ...prev };
-                  if (currentSessionId && snap[currentSessionId]) {
-                    snap[currentSessionId].activeCorrection = null;
-                  }
-                  return snap;
-                });
-              }}
-            >
-              ×
-            </button>
-          </div>
-        )}
-        <ChatArea
-          topic={currentSession.topic}
-          messages={currentSession.messages}
-          onSendMessage={handleSendMessage}
-          isLoading={isLoading}
-          masteryScore={currentSession.masteryScore}
-        />
+    <div className={`${styles.studyChatLayout} ${feynmanStyles.shell} ${!showChat ? feynmanStyles.focused : ''}`}>
+      {showChat && <Sidebar key={session.id} sessionId={session.id} topic={session.topic} masteryScore={session.masteryScore} messages={session.messages}
+        onGoHome={() => router.push('/')} onDeleteSession={() => { if (!inFlight.current) setDeleteSessionId(session.id); }} disabled={isSending} />}
+      <main ref={mainContentRef} className={styles.mainContent}>
+        <nav className={feynmanStyles.breadcrumb} aria-label="Study navigation"><Link href="/courses">← Learning path</Link><span>Feynman practice</span><Link href="/library">Saved practice</Link></nav>
+        {error && session.status !== 'checkpoint' && <p role="alert" style={{ color: '#fca5a5', padding: '12px' }}>{error}</p>}
+        {learningPath ? <LiveLearningExperience
+          topic={session.topic}
+          levelLabel={levelLabel}
+          status={session.status}
+          learningPath={learningPath}
+          currentStep={currentStep}
+          masteryScore={session.masteryScore}
+          messages={session.messages}
+          report={checkpointReport}
+          reportUnavailable={reportUnavailable}
+          reviewMaterial={courseMaterial}
+          onContinueCourse={session.courseCheckpointKey ? () => router.push('/courses') : undefined}
+          isSubmitting={isSending}
+          checkpointError={session.status === 'checkpoint' ? error : undefined}
+          onFocusExplanation={() => mainContentRef.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus()}
+          onSubmitCheckpoint={handleSubmitCheckpoint}
+          onReturnToLibrary={() => router.push('/library')}
+        /> : (reportUnavailable || session.learningPath ? <p role="alert" style={{ color: '#fca5a5', padding: '12px' }}>{reportUnavailable
+          ? 'The saved feedback report is unavailable because its learning path could not be loaded. Your conversation remains below.'
+          : 'This saved learning path is unavailable. Your conversation remains below.'}</p> : null)}
+        {showChat && <>
+          {correction && <div className={styles.correctionBanner}><div className={styles.correctionIcon}>Fact check</div><p>{correction}</p><button className={styles.dismissCorrection} disabled={isSending} onClick={dismissCorrection} aria-label="Dismiss correction">×</button></div>}
+          {factCheck?.status === 'unverified' && <p role="status" style={{ padding: '12px', color: '#cbd5e1' }}>Could not verify this explanation. {factCheck.reason}</p>}
+          {factCheck?.status === 'accurate' && <p role="status" style={{ padding: '12px', color: '#a7f3d0' }}>The checked explanation agrees with the available source.</p>}
+          {session.status === 'completed' && <p role="status" style={{ padding: '12px 16px', color: '#34d399' }}>Learning path complete. Your conversation is saved for review.</p>}
+          <ChatArea key={session.id} topic={session.topic} messages={session.messages} onSendMessage={handleSendMessage} isLoading={isSending} isComplete={session.status === 'completed'} masteryScore={session.masteryScore} />
+          {session.reviewDate && <p style={{ padding: '8px 16px' }}>Next review: {new Date(session.reviewDate).toLocaleDateString()}</p>}
+          {!!sources?.length && <details className={styles.studyDisclosure}><summary>Notes used for this reply</summary>{sources.map(source => <p key={source.id}>Passage {source.position + 1}: {source.text}</p>)}</details>}
+        </>}
       </main>
-      <div className={styles.actionButtons}>
-        {currentSession.masteryScore >= 90 && (
-          <button /*onClick={generatePDF}*/ className={styles.downloadBtn} title="Download Study Guide">
-            <Download size={18} />
-            <span>Study Guide</span>
-          </button>
-        )}
-      </div>
+      {deleteSessionId === session.id && <DeleteSessionDialog id={session.id} topic={session.topic}
+        onDismiss={() => setDeleteSessionId(null)} onDeleted={() => router.push('/')} />}
     </div>
   );
 }

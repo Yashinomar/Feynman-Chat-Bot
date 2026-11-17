@@ -1,209 +1,98 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenAI } from '@google/genai';
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { prisma } from '@/lib/prisma';
+import { apiError, ApiError, readJson, requireUser } from '@/lib/api';
+import { embedTexts, evaluationSchema, generateJson, messageSchema, textSchema } from '@/lib/ai';
+import { rankPassages, type NoteSource } from '@/lib/rag';
+import { calculateNextReview, tutorInstruction } from '@/lib/study';
+import { advancePath, legacyLearningPath, parseLearningPath } from '@/lib/learning-path';
+import { levelSchema } from '@/lib/ai';
+import { requireRoomMember } from '@/lib/signaling';
 
-// Instantiate the primary Gemini instructor pipeline
-const tutorModelClient = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
+export const runtime = 'nodejs';
 
-// Temporary volatile memory until we connect to Supabase
-const serverContext: any = global;
+const soloSchema = z.object({
+  sessionId: z.string().uuid(),
+  content: textSchema,
+  requestId: z.string().uuid(),
+  expectedVersion: z.number().int().min(0),
+}).strict();
+const multiplayerSchema = z.object({
+  roomId: z.string().min(20).max(100),
+  messages: z.array(messageSchema).min(1).max(20),
+  requestId: z.string().uuid().optional(),
+}).strict();
+const inputSchema = z.union([soloSchema, multiplayerSchema]);
+const withMessages = { messages: { orderBy: { sequence: 'asc' as const } } };
 
-function calculateCosineSimilarity(vecX: number[], vecY: number[]) {
-    let dot = 0;
-    let normX = 0;
-    let normY = 0;
-    // Classic cosine math. Need to optimize this later if lists get huge.
-    for (let j = 0; j < vecX.length; j++) {
-        dot += vecX[j] * vecY[j];
-        normX += vecX[j] * vecX[j];
-        normY += vecY[j] * vecY[j];
+export async function POST(req: Request) {
+  try {
+    const user = await requireUser(req, 'chat', 10, 60000);
+    const input = inputSchema.parse(await readJson(req, 131072));
+    if ('roomId' in input) {
+      const room = await requireRoomMember(input.roomId, user.id);
+      if (room.hostId !== user.id) throw new ApiError(403, 'Only the host can request the multiplayer tutor.');
+      if (input.messages.at(-1)?.role !== 'user') throw new ApiError(400, 'End the conversation with a student message.');
+      const evaluation = await generateJson(tutorInstruction(room, [], room.gameMode), input.messages, evaluationSchema);
+      return NextResponse.json({ ...evaluation, sources: [] });
     }
-    if (normX === 0 || normY === 0) return 0;
-    return dot / (Math.sqrt(normX) * Math.sqrt(normY));
-}
 
-export async function POST(req: NextRequest) {
-    try {
-        const incomingPayload = await req.json();
-        
-        const conversationHistory = incomingPayload.messages;
-        const requestedSubject = incomingPayload.topic;
-        const currentRuleset = incomingPayload.gameMode || 'classic';
-        const uniqueChatId = incomingPayload.sessionId;
-        const usingUploadedSyllabus = incomingPayload.isRagSession;
-        
-        const configuredStudentAge = incomingPayload.studentLevel || 'highschool';
-        const configuredPersonalityTrait = incomingPayload.studentBehavior || 'curious';
-
-        if (!conversationHistory || !Array.isArray(conversationHistory)) {
-            return NextResponse.json({ error: 'Conversation history payload structure is invalid.' }, { status: 400 });
-        }
-
-        // Applying game rules for multiplayer modes
-        let multiplayerRules = "";
-        if (currentRuleset === 'survival') {
-          multiplayerRules = `
-We are in "Survival Mode". The students only have a small number of messages to get their explanation across.
-Be noticeably stricter with scoring and occasionally remind them that they don’t have many attempts left.
-`;
-        } else if (currentRuleset === 'rush') {
-          multiplayerRules = `
-We are in "Rush Timer Mode". The students have roughly three minutes on the clock.
-Keep replies short and quick to read (ideally one or two sentences) so they can keep typing, and keep the energy up.
-`;
-        }
-
-        let injectedSyllabusMaterial = "";
-        
-        // Match the student's message against their uploaded textbook or notes
-        if (usingUploadedSyllabus && uniqueChatId && serverContext.courseNoteMaps && serverContext.courseNoteMaps[uniqueChatId] && tutorModelClient) {
-            const finalStudentArgument = conversationHistory.filter((msg: any) => msg.role === 'user').pop();
-            
-            if (finalStudentArgument) {
-                try {
-                    const vectorRetrievalCall = await tutorModelClient.models.embedContent({
-                         model: 'gemini-embedding-001',
-                         contents: finalStudentArgument.content,
-                    });
-                    
-                    if (vectorRetrievalCall.embeddings && vectorRetrievalCall.embeddings[0] && vectorRetrievalCall.embeddings[0].values) {
-                        const targetMathVector = vectorRetrievalCall.embeddings[0].values;
-                        const cachedTextbookSlices = serverContext.courseNoteMaps[uniqueChatId];
-                        
-                        const rankedCourseNotes = cachedTextbookSlices.map((noteSlice: any) => ({
-                            passage: noteSlice.text,
-                            matchStrength: calculateCosineSimilarity(targetMathVector, noteSlice.vector)
-                        }));
-                        
-                        // Sort descending to get the best matches
-                        rankedCourseNotes.sort((alpha: any, beta: any) => beta.matchStrength - alpha.matchStrength);
-                        const mostRelevantPassages = rankedCourseNotes.slice(0, 3);
-                        
-                        injectedSyllabusMaterial = `
-The user is working from their own uploaded notes. Compare their explanation to the following chunks from that material:
---- RELEVANT NOTES ---
-${mostRelevantPassages.map((chunk: any, i: number) => `Chunk ${i + 1}:\n${chunk.passage}`).join('\n\n')}
-----------------------
-If they move away from what these notes say in an important way, gently correct them using only what appears above.
-`;
-                    }
-                } catch (vectorSearchError) {
-                    // This fails occasionally if the user sends garbage text. Just log and skip to keep the chat alive.
-                    console.error("Vector similarity lookup failed abruptly:", vectorSearchError);
-                }
-            }
-        }
-
-        let ageConstraints = "";
-        if (configuredStudentAge === 'kid') {
-            ageConstraints = "You are a younger student (around 8 years old). Big technical words lose you quickly, so you ask for simpler versions when things sound too formal.";
-        } else if (configuredStudentAge === 'highschool') {
-            ageConstraints = "You are in high school. You know the basics but really connect with everyday examples and stories.";
-        } else if (configuredStudentAge === 'professional') {
-            ageConstraints = "You are a college-level or professional learner. You are fine with precise terminology, but you still want the core idea to be very clear.";
-        }
-
-        let behavioralConstraints = "";
-        if (configuredPersonalityTrait === 'curious') {
-            behavioralConstraints = "You are naturally curious and like asking follow-up questions when something is interesting or unclear.";
-        } else if (configuredPersonalityTrait === 'skeptical') {
-            behavioralConstraints = "You are a bit skeptical. You politely push back or ask for concrete examples when something doesn’t fully convince you.";
-        } else if (configuredPersonalityTrait === 'distracted') {
-            behavioralConstraints = "You get distracted easily. You occasionally miss a small point and ask them to restate or summarize it.";
-        } else if (configuredPersonalityTrait === 'enthusiastic') {
-            behavioralConstraints = "You are easily excited by new ideas and you react with a lot of positive energy when something clicks.";
-        }
-
-        const assembledPrompt = `
-You are playing the role of a beginner student. The user is using the Feynman technique to teach you about: "${requestedSubject}".
-
---- YOUR PERSONA ---
-${ageConstraints}
-${behavioralConstraints}
---------------------
-
-Your goals:
-1. Stay in character as this student. Ask questions and react in a way that fits the level and behavior above.
-2. Give them a CURRENT mastery score for the topic from 0 to 100.
-   - 0 means they haven’t explained anything yet.
-   - 20–50 means they are starting to cover the basics.
-   - 60–90 means they have laid out the core ideas and some helpful examples or analogies.
-   - 100 means they’ve explained the main idea in clear, simple terms.
-   When they have clearly nailed the core idea of "${requestedSubject}" with a solid explanation or analogy, go ahead and give them 100% instead of nitpicking forever.
-
-${multiplayerRules}
-
-${injectedSyllabusMaterial}
-
-You MUST respond with a valid JSON object in the following format:
-{
-  "reply": "Your response as the student here...",
-  "score": <number 0-100>
-}
-`;
-
-        if (!tutorModelClient) {
-            console.warn("Missing Gemini key! Spitting out a test response.");
-            const previousInteractions = conversationHistory.filter((m: any) => m.role === 'user').length;
-            return NextResponse.json({
-                reply: "I think I get it a bit better now! So basically it's like " + requestedSubject + "? What happens if something goes wrong though? (Note: Mock response. Please add GEMINI_API_KEY to .env)",
-                score: Math.min(previousInteractions * 20, 100)
-            });
-        }
-
-        // We truncate to the last 5 turns (10 messages) so we don't blow up our token limit on standard accounts.
-        const activeSlidingWindow = conversationHistory.length > 10 ? conversationHistory.slice(conversationHistory.length - 10) : conversationHistory;
-
-        const mappedGeminiThread = activeSlidingWindow.map((msg: any) => ({
-            role: msg.role === 'ai' ? 'model' : 'user',
-            parts: [{ text: msg.content }]
-        }));
-
-        const rawAiResult = await tutorModelClient.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: [
-                { role: 'user', parts: [{ text: assembledPrompt }] },
-                ...mappedGeminiThread
-            ],
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: "OBJECT",
-                    properties: {
-                        reply: { type: "STRING" },
-                        score: { type: "INTEGER" }
-                    },
-                    required: ["reply", "score"]
-                },
-                temperature: 0.7,
-            }
-        });
-
-        let unsafeResponseString = rawAiResult.text || '';
-        
-        // Strip out the markdown formatting that Gemini occasionally injects even in JSON mode
-        if (unsafeResponseString.startsWith('```')) {
-            unsafeResponseString = unsafeResponseString.replace(/^```(json)?\n/i, '').replace(/\n```$/i, '');
-        }
-        
-        // We've had issues with null bytes and random vertical tabs breaking JSON.parse()
-        unsafeResponseString = unsafeResponseString.replace(/[\u0000-\u0009\u000B-\u000C\u000E-\u001F]+/g, '');
-
-        if (!unsafeResponseString.trim()) {
-            throw new Error('Received an empty completion body from Gemini API.');
-        }
-
-        const safeComputedEvaluation = JSON.parse(unsafeResponseString);
-
-        return NextResponse.json({
-            reply: safeComputedEvaluation.reply,
-            score: safeComputedEvaluation.score
-        });
-
-    } catch (apiFault: any) {
-        console.error("The AI tutor encountered an internal failure inside chat pipeline:", apiFault);
-        return NextResponse.json(
-            { error: apiFault.message || 'The AI tutor encountered an internal failure.' },
-            { status: 500 }
-        );
+    const session = await prisma.session.findFirst({
+      where: { id: input.sessionId, userId: user.id },
+      include: withMessages,
+    });
+    if (!session) throw new ApiError(404, 'Session not found.');
+    const previousUser = session.messages.find(message => message.requestId === input.requestId && message.role === 'user');
+    if (previousUser) {
+      if (previousUser.content !== input.content) throw new ApiError(409, 'This request was already used for a different message.');
+      const previousReply = session.messages.find(message => message.requestId === input.requestId && message.role === 'ai');
+      if (!previousReply) throw new ApiError(409, 'This turn could not be recovered. Reload the session before continuing.');
+      return NextResponse.json({ session, reply: previousReply.content, score: session.masteryScore, sources: [], replayed: true });
     }
+    if (session.version !== input.expectedVersion) throw new ApiError(409, 'The session changed in another tab. Reload it before sending this message.');
+    if (session.status !== 'active') {
+      throw new ApiError(409, session.status === 'checkpoint'
+        ? 'Your learning path is complete. Submit the Feynman checkpoint to continue.'
+        : 'This session is completed. Start a new study session to keep practicing.');
+    }
+    if (session.messages.length >= 500) throw new ApiError(409, 'This session has reached its message limit. Start a new study session.');
+
+    let sources: NoteSource[] = [];
+    if (session.isRagSession) {
+      const passages = await prisma.noteChunk.findMany({ where: { sessionId: session.id }, orderBy: { position: 'asc' }, take: 61 });
+      if (!passages.length) throw new ApiError(503, 'The notes for this session are unavailable. Please upload them again.');
+      const [query] = await embedTexts([input.content]);
+      sources = rankPassages(query, passages);
+    }
+    const level = levelSchema.catch('highschool').parse(session.studentLevel);
+    const path = parseLearningPath(session.learningPath, { topic: session.topic, level }) ?? legacyLearningPath(session.topic, level);
+    const stage = Math.min(Math.max(session.pathIndex, 0), path.length - 1);
+    const history = session.messages.slice(-10).map(message => messageSchema.parse({ role: message.role, content: message.content }));
+    history.push({ role: 'user', content: input.content });
+    const evaluation = await generateJson(tutorInstruction(session, sources, 'classic', { steps: path, index: stage }), history, evaluationSchema);
+    const progress = advancePath(stage, path, evaluation.score, evaluation.stepComplete);
+    const reply = progress.complete
+      ? progress.allComplete
+        ? `You have completed the learning path for ${session.topic}. Your Feynman checkpoint is ready.`
+        : `You have explained ${path[stage].title} clearly. Next, ${path[progress.nextIndex].objective}`
+      : evaluation.reply;
+    const review = calculateNextReview(progress.masteryScore, session.repetition, session.efactor, session.interval);
+    const sequence = (session.messages.at(-1)?.sequence ?? -1) + 1;
+    // The score, review schedule, and both messages commit together. Version guards reject concurrent turns.
+    const saved = await prisma.$transaction(async transaction => {
+      const update = await transaction.session.updateMany({
+        where: { id: session.id, userId: user.id, version: input.expectedVersion },
+        data: { masteryScore: progress.masteryScore, ...review, learningPath: JSON.stringify(path), pathIndex: progress.nextIndex, status: progress.allComplete ? 'checkpoint' : session.status, version: { increment: 1 }, activeCorrection: null },
+      });
+      if (update.count !== 1) throw new ApiError(409, 'The session changed while the tutor was replying. Reload before trying again.');
+      await transaction.message.createMany({ data: [
+        { sessionId: session.id, role: 'user', content: input.content, requestId: input.requestId, sequence },
+        { sessionId: session.id, role: 'ai', content: reply, requestId: input.requestId, sequence: sequence + 1 },
+      ] });
+      return transaction.session.findUniqueOrThrow({ where: { id: session.id }, include: withMessages });
+    });
+    return NextResponse.json({ session: saved, reply, score: progress.masteryScore, sources });
+  } catch (error) {
+    return apiError(error);
+  }
 }

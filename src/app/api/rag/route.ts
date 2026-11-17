@@ -1,106 +1,55 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenAI } from '@google/genai';
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { prisma } from '@/lib/prisma';
+import { apiError, ApiError, readJson, requireUser } from '@/lib/api';
+import { behaviorSchema, embedTexts, levelSchema, topicSchema } from '@/lib/ai';
+import { chunkDocument } from '@/lib/rag';
+import { generateLearningPath } from '@/lib/learning-path';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
-// Temporary cache for the alpha phase. Need to migrate this to Vercel KV or a dedicated Postgres instance once the beta launches and we get more students onboarding.
-const serverMem: any = global;
-if (!serverMem.courseNoteMaps) serverMem.courseNoteMaps = {};
+const uploadSchema = z.object({
+  documentText: z.string().max(60000),
+  topic: topicSchema,
+  studentLevel: levelSchema.default('highschool'),
+  studentBehavior: behaviorSchema.default('curious'),
+}).strict();
 
-const geminiInstructorClient = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
-
-export async function POST(req: NextRequest) {
-    let rawMaterialData = '';
-    let targetSubjectName = '';
-
-    try {
-        const incomingReqBody = await req.json();
-        rawMaterialData = incomingReqBody.documentText;
-        targetSubjectName = incomingReqBody.topic;
-
-        // Validating the student upload - sometimes the OCR completely fails on old textbook PDFs
-        if (!rawMaterialData || typeof rawMaterialData !== 'string' || rawMaterialData.trim().length < 10) {
-            return NextResponse.json({ error: 'Uploaded study material is too short or corrupted. Cannot process index.' }, { status: 400 });
-        }
-
-        const activeStudentSession = Date.now().toString();
-
-        if (!geminiInstructorClient) {
-          // Dev ops override for local testing without racking up the Google bill
-          serverMem.courseNoteMaps[activeStudentSession] = [
-             { text: rawMaterialData.substring(0, 500), vector: new Array(3072).fill(0.15) }
-          ];
-          return NextResponse.json({ sessionId: activeStudentSession, success: true });
-        }
-
-        // We discovered during testing with the bio textbooks that double newlines aren't enough, we need to split by grammatical sentences to prevent context shearing.
-        const sentences = rawMaterialData.replace(/\n/g, ' ').split(/(?<=\.)\s+/);
-        
-        const semanticPassages: string[] = [];
-        let passageComposer = "";
-
-        // Through testing empirically with the 001 embedding model, anything past 1200 characters starts to lose signal-to-noise ratio rapidly for technical STEM subjects.
-        const OPTIMAL_PASSAGE_LIMIT = 1200; 
-
-        let sIndex = 0;
-        while (sIndex < sentences.length) {
-            const currentSentence = sentences[sIndex];
-            
-            if (passageComposer.length > 0 && (passageComposer.length + currentSentence.length) > OPTIMAL_PASSAGE_LIMIT) {
-                semanticPassages.push(passageComposer.trim());
-                passageComposer = currentSentence;
-            } else {
-                passageComposer += (passageComposer.length === 0 ? "" : " ") + currentSentence;
-            }
-            sIndex++;
-        }
-        
-        if (passageComposer.trim().length > 0) semanticPassages.push(passageComposer.trim());
-
-        const finalSyllabusVectors = [];
-        let processingFailures = 0;
-        
-        // Push the passages through the vector model
-        for (let pIdx = 0; pIdx < semanticPassages.length; pIdx++) {
-            const passageChunk = semanticPassages[pIdx];
-            if (!passageChunk || passageChunk.length < 5) continue; // Skip meaningless fragments
-            
-            try {
-                const vectorResult = await geminiInstructorClient.models.embedContent({
-                    model: 'gemini-embedding-001',
-                    contents: passageChunk,
-                });
-                
-                if (vectorResult?.embeddings?.[0]?.values) {
-                     finalSyllabusVectors.push({
-                         text: passageChunk,
-                         vector: vectorResult.embeddings[0].values
-                     });
-                } else {
-                    processingFailures++;
-                }
-            } catch (authOrRateLimitError) {
-                console.warn(`Vectorizing passage [${pIdx}] failed. Likely hitting the Google rate limits. Delaying won't help here so we drop the chunk. Error:`, authOrRateLimitError);
-                processingFailures++;
-            }
-        }
-
-        // We need to alert the user if we dropped a significant portion of their textbook
-        if (semanticPassages.length > 5 && processingFailures > semanticPassages.length * 0.4) {
-             throw new Error("Too many passages failed to analyze. The resulting tutor session would be highly inaccurate. Please try a smaller document.");
-        }
-
-        // Store the final processed map
-        serverMem.courseNoteMaps[activeStudentSession] = finalSyllabusVectors;
-
-        return NextResponse.json({ 
-            sessionId: activeStudentSession, 
-            success: true, 
-            chunksProcessed: finalSyllabusVectors.length 
-        });
-
-    } catch (criticalFailure: any) {
-        console.error("Critical failure during syllabus ingestion flow:", criticalFailure);
-        return NextResponse.json({ error: criticalFailure.message || 'System fault during document ingestion. Please contact support if this persists.' }, { status: 500 });
+export async function POST(req: Request) {
+  try {
+    const user = await requireUser(req, 'rag', 4, 3600000);
+    const input = uploadSchema.parse(await readJson(req, 250000));
+    const chunks = chunkDocument(input.documentText);
+    if (await prisma.session.count({ where: { userId: user.id } }) >= 200) {
+      throw new ApiError(409, 'You have reached 200 study sessions. Delete an old session before uploading more notes.');
     }
+    // Index the complete document before creating anything. A partial index is never advertised as usable.
+    const vectors = await embedTexts(chunks);
+    const path = await generateLearningPath(input.topic, input.studentLevel, input.documentText);
+    const session = await prisma.$transaction(async transaction => {
+      if (await transaction.session.count({ where: { userId: user.id } }) >= 200) {
+        throw new ApiError(409, 'You have reached 200 study sessions. Delete an old session before uploading more notes.');
+      }
+      return transaction.session.create({
+        data: {
+          userId: user.id,
+          topic: input.topic,
+          studentLevel: input.studentLevel,
+          studentBehavior: input.studentBehavior,
+          isRagSession: true,
+          learningPath: JSON.stringify(path),
+          messages: { create: {
+            role: 'ai', sequence: 0,
+            content: `Your notes for ${input.topic} are ready. Explain one key idea, and I will use relevant passages to ask questions.`,
+          } },
+          noteChunks: { create: chunks.map((text, position) => ({ text, position, embedding: JSON.stringify(vectors[position]) })) },
+        },
+        include: { messages: { orderBy: { sequence: 'asc' } } },
+      });
+    });
+    return NextResponse.json({ sessionId: session.id, session, success: true, chunksProcessed: chunks.length }, { status: 201 });
+  } catch (error) {
+    return apiError(error);
+  }
 }

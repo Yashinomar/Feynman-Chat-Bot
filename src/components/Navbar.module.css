@@ -104,3 +104,32 @@
     transform: translateY(-1px);
     box-shadow: 0 6px 16px rgba(255, 255, 255, 0.15);
 }
+
+@media (max-width: 800px) {
+    .navContainer {
+        padding-inline: 12px;
+    }
+
+    .logoText, .navLink span, .newSessionBtn span {
+        display: none;
+    }
+
+    .navLinks {
+        gap: 0;
+        padding: 3px;
+    }
+
+    .navLink, .newSessionBtn {
+        justify-content: center;
+        min-width: 44px;
+        min-height: 44px;
+        padding: 8px;
+    }
+}
+
+@media (max-width: 360px) {
+    .navContainer { padding-inline: 8px; }
+    .navLinks { padding: 0; }
+    .navLink { min-width: 40px; padding: 6px; }
+    .logoIcon { width: 32px; height: 36px; }
+}

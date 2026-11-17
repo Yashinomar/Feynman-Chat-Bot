@@ -23,6 +23,7 @@ export default function ReactiveBackground() {
             <div
                 className="absolute inset-0 opacity-[0.15]"
                 style={{
+                    opacity: 0.12,
                     backgroundImage: `linear-gradient(to right, #4f4f4f 1px, transparent 1px), linear-gradient(to bottom, #4f4f4f 1px, transparent 1px)`,
                     backgroundSize: '40px 40px'
                 }}

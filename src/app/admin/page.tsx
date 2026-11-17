@@ -4,8 +4,9 @@ import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ShieldCheck, Users, BrainCircuit, Star, ArrowLeft, Loader2, Database } from 'lucide-react';
+import { ShieldCheck, Users, Star, ArrowLeft, Loader2, Database } from 'lucide-react';
 import styles from '../dashboard/dashboard.module.css';
+import CourseManager from '@/components/CourseManager';
 
 interface UserData {
   id: string;
@@ -34,15 +35,16 @@ export default function AdminDashboard() {
   const { data: session, status } = useSession();
   const [data, setData] = useState<AdminStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (status === 'unauthenticated') {
-      router.push('/login');
+      router.push('/admin/login');
       return;
     }
 
     if (status === 'authenticated') {
-      const role = (session?.user as any)?.role;
+      const role = session?.user?.role;
       if (role !== 'ADMIN') {
         router.push('/');
         return;
@@ -59,8 +61,8 @@ export default function AdminDashboard() {
           setIsLoading(false);
         })
         .catch(err => {
-          console.error(err);
-          router.push('/');
+          setError(err instanceof Error ? err.message : 'Unable to load administration data.');
+          setIsLoading(false);
         });
     }
   }, [status, session, router]);
@@ -79,6 +81,7 @@ export default function AdminDashboard() {
 
   return (
     <div className={styles.container}>
+      {error && <p role="alert">{error}</p>}
       <header className={styles.header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <div style={{ background: 'rgba(244, 63, 94, 0.1)', padding: '12px', borderRadius: '16px' }}>
@@ -94,6 +97,7 @@ export default function AdminDashboard() {
         </Link>
       </header>
 
+      <CourseManager />
       {/* Global Stats */}
       <h2 style={{ fontSize: '1.25rem', color: 'white', marginBottom: '16px' }}>Global Statistics</h2>
       <div className={styles.statsGrid}>

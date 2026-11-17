@@ -5,7 +5,7 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./dev.db"
+  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -15,6 +15,7 @@ model User {
   role      String    @default("USER") // 'USER' or 'ADMIN'
   createdAt DateTime  @default(now())
   sessions  Session[]
+  courseReadings CourseReadingProgress[]
 }
 
 model Session {
@@ -32,16 +33,89 @@ model Session {
   isRagSession     Boolean  @default(false)
   studentLevel     String?
   studentBehavior  String?
+  version          Int      @default(0)
+  learningPath     String?
+  pathIndex        Int      @default(0)
+  checkpointReport String?
+  courseCheckpointKey String?
+  courseContext String?
   
   userId           String
   user             User     @relation(fields: [userId], references: [id])
   messages         Message[]
+  noteChunks       NoteChunk[]
+
+  @@index([userId, updatedAt])
+  @@unique([userId, courseCheckpointKey])
 }
 
 model Message {
   id        String   @id @default(uuid())
   role      String   // 'user' or 'ai'
   content   String
+  createdAt DateTime @default(now())
+  sequence  Int
+  requestId String?
   sessionId String
   session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, requestId, role])
+  @@unique([sessionId, sequence])
+}
+
+model NoteChunk {
+  id        String  @id @default(uuid())
+  sessionId String
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  position  Int
+  text      String
+  embedding String
+
+  @@unique([sessionId, position])
+}
+
+model RateLimit {
+  key       String   @id
+  count     Int
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+model Room {
+  id              String   @id
+  hostId          String
+  guestId         String?
+  topic           String
+  gameMode        String
+  studentLevel    String?
+  studentBehavior String?
+  state           String   @default("{}")
+  version         Int      @default(0)
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime
+
+  @@index([expiresAt])
+  @@index([hostId])
+}
+
+model Course {
+  id          String   @id
+  title       String
+  draft       String
+  published   String?
+  version     Int      @default(0)
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
+model CourseReadingProgress {
+  userId String
+  courseId String
+  lessonId String
+  revision String
+  completedAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, courseId, lessonId])
 }

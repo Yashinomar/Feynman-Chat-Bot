@@ -1,65 +1,67 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { BookOpen, Calendar, Star, Trash2, ArrowRight } from 'lucide-react';
 import styles from './library.module.css';
 import { useSession } from 'next-auth/react';
-import type { Session } from '../chat/[id]/page';
+import { errorMessage, requestJson, studySessionsSchema, type StudySession as Session } from '@/lib/client-api';
+import DeleteSessionDialog from '@/components/DeleteSessionDialog';
 
 export default function Library() {
   const router = useRouter();
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [isMounted, setIsMounted] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const focusHeadingAfterDelete = useRef(false);
   
-  const { data: authSession, status } = useSession();
+  const { status } = useSession();
 
   useEffect(() => {
-    setIsMounted(true);
+    let active = true;
     if (status === 'unauthenticated') {
       router.push('/login');
     } else if (status === 'authenticated') {
-      fetch('/api/sessions')
-        .then(res => res.json())
-        .then(data => {
-          if (Array.isArray(data)) {
-            const sorted = data.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-            setSessions(sorted);
-          }
-        })
-        .catch(e => console.error("Failed to fetch sessions from DB", e));
+      requestJson('/api/sessions', studySessionsSchema)
+        .then(data => { if (active) setSessions(data); })
+        .catch(err => { if (active) setError(errorMessage(err)); })
+        .finally(() => { if (active) setIsLoading(false); });
     }
+    return () => { active = false; };
   }, [status, router]);
 
-  const handleDelete = async (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    e.preventDefault();
-    try {
-      const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        setSessions(prev => prev.filter(s => s.id !== id));
-      }
-    } catch (err) {
-      console.error("Failed to delete session", err);
+  useEffect(() => {
+    if (!deleteTarget && focusHeadingAfterDelete.current) {
+      focusHeadingAfterDelete.current = false;
+      headingRef.current?.focus();
     }
+  }, [deleteTarget]);
+
+  const removeDeletedSession = (id: string) => {
+    focusHeadingAfterDelete.current = true;
+    setSessions(prev => prev.filter(session => session.id !== id));
+    setDeleteTarget(null);
   };
 
-  if (!isMounted) return null;
+  if (isLoading || status !== 'authenticated') return <p role="status">Loading your study history…</p>;
 
   return (
     <div className={styles.container}>
       <main className={styles.mainContent}>
+        {error && <p role="alert">{error}</p>}
         
         <header className={styles.header}>
           <div className={styles.headerTitle}>
             <BookOpen size={32} color="#8b5cf6" />
-            <h1>Topic Library</h1>
+            <h1 ref={headingRef} tabIndex={-1}>Topic Library</h1>
           </div>
           <p>Look back over past sessions, skim your notes, and see when you last worked on each topic.</p>
         </header>
 
-        {sessions.length === 0 ? (
+        {!error && sessions.length === 0 ? (
           <div className={styles.emptyState}>
             <h2>Your library is empty</h2>
             <p>Teach a topic once and it will show up here.</p>
@@ -73,14 +75,17 @@ export default function Library() {
                 <div 
                   key={session.id} 
                   className={styles.card}
-                  onClick={() => router.push(`/chat/${session.id}`)}
                 >
                   <div className={styles.cardHeader}>
                     <h3 className={styles.topic}>{session.topic}</h3>
                     <button 
                       className={styles.deleteBtn}
-                      onClick={(e) => handleDelete(e, session.id)}
-                      title="Delete Session"
+                      type="button"
+                      onClick={event => {
+                        event.currentTarget.focus();
+                        setDeleteTarget(session);
+                      }}
+                      aria-label={`Delete ${session.topic}`}
                     >
                       <Trash2 size={16} />
                     </button>
@@ -99,9 +104,9 @@ export default function Library() {
 
                   <div className={styles.resumeArea}>
                     <span>{session.messages.length} messages</span>
-                    <div className={styles.resumeBtn}>
-                      Resume <ArrowRight size={14} />
-                    </div>
+                    <Link className={styles.resumeBtn} href={`/chat/${session.id}`} aria-label={`Resume ${session.topic}`}>
+                      Resume <ArrowRight size={14} aria-hidden="true" />
+                    </Link>
                   </div>
                 </div>
               );
@@ -109,6 +114,10 @@ export default function Library() {
           </div>
         )}
 
+        {deleteTarget && (
+          <DeleteSessionDialog id={deleteTarget.id} topic={deleteTarget.topic}
+            onDismiss={() => setDeleteTarget(null)} onDeleted={() => removeDeletedSession(deleteTarget.id)} />
+        )}
       </main>
     </div>
   );

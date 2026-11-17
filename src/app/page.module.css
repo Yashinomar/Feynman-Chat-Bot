@@ -5,6 +5,108 @@
     overflow: hidden;
 }
 
+.studyChatLayout {
+    display: flex;
+    height: calc(100vh - 70px);
+    height: calc(100dvh - 70px);
+    width: 100%;
+}
+
+.studyChatLayout > .mainContent {
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.studyChatLayout .sidebar {
+    overflow-y: auto;
+}
+
+.studyToolsToggle {
+    display: none;
+}
+
+.studyToolsContent {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+.currentObjective, .studyDisclosure {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-color);
+    overflow-wrap: anywhere;
+}
+
+.currentObjective {
+    background: #141e30;
+}
+
+.currentObjective span {
+    display: block;
+    margin-top: 4px;
+}
+
+.studyDisclosure summary {
+    cursor: pointer;
+    color: #bfdbfe;
+}
+
+.studyDisclosure > :not(summary) {
+    margin-top: 8px;
+}
+
+.studyDisclosure ol {
+    padding-left: 24px;
+}
+
+.studyDisclosure [aria-current="step"] {
+    font-weight: 700;
+}
+
+.studyChatLayout .chatWrapper {
+    min-height: min(18rem, 45dvh);
+}
+
+.studyChatLayout .chatArea {
+    min-height: 0;
+}
+
+.studyChatLayout .chatHeader, .studyChatLayout .messageContent {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.studyChatLayout .textarea {
+    min-width: 0;
+}
+
+.personaChoices {
+    margin-block: 16px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.personaChoices label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-block: 6px;
+    cursor: pointer;
+}
+
+.personaError {
+    color: #fca5a5;
+}
+
+.personaActions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 16px;
+}
+
 /* Sidebar Styling */
 .sidebar {
     width: 320px;
@@ -608,3 +710,82 @@
         padding: 16px;
     }
 }
+
+@media (max-width: 768px), (max-height: 550px) {
+    .studyChatLayout {
+        flex-direction: column;
+        height: auto;
+        min-height: calc(100dvh - 70px);
+    }
+
+    .studyChatLayout > .mainContent {
+        overflow: visible;
+    }
+
+    .studyChatLayout .sidebar {
+        width: 100%;
+        min-width: 0;
+        padding: 8px 12px;
+        gap: 8px;
+        overflow: visible;
+    }
+
+    .studyToolsToggle {
+        display: inline-block;
+        align-self: flex-start;
+    }
+
+    .studyToolsContent {
+        gap: 12px;
+    }
+
+    .studyToolsContent[data-expanded="false"] {
+        display: none;
+    }
+
+    .studyChatLayout .chatArea {
+        flex: 1 0 auto;
+        min-height: 7rem;
+        max-height: max(8rem, 45dvh);
+        padding: 12px;
+    }
+
+    .studyChatLayout .chatHeader {
+        position: static;
+        padding: 12px;
+    }
+
+    .studyChatLayout .inputArea {
+        position: sticky;
+        z-index: 20;
+        bottom: 0;
+        padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+    }
+
+    .studyChatLayout .inputWrapper {
+        gap: 6px;
+        padding: 6px;
+    }
+
+    .studyChatLayout .inputWrapper button {
+        padding-inline: 10px;
+    }
+
+    .studyChatLayout .textarea {
+        font-size: 16px;
+    }
+
+    .studyChatLayout .correctionBanner {
+        margin-inline: 12px;
+        overflow-wrap: anywhere;
+    }
+}
+
+/* The Feynman workspace uses normal document flow; only the transcript scrolls. */
+.studyChatLayout .chatWrapper { min-height:0; flex:none; border:1px solid #35434a; border-radius:20px; background:#172127; overflow:hidden; }
+.studyChatLayout .chatHeader { position:static; padding:20px; }
+.studyChatLayout .inputArea { position:static; background:#172127; padding:16px; }
+.studyChatLayout .inputWrapper { border-color:#43544c; background:#101a1f; }
+.studyChatLayout .messageContent { background:#22332b; border:1px solid #3c5745; color:#e5efe8; white-space:pre-wrap; }
+.studyChatLayout .chatArea { flex:none; padding:20px; }
+@media(max-width:1000px) { .studyChatLayout .studyToolsToggle { display:inline-flex; min-height:44px; align-items:center; } .studyChatLayout .studyToolsContent[data-expanded="false"] { display:none; } .studyChatLayout .studyToolsContent { margin-top:16px; } }

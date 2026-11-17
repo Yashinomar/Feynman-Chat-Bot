@@ -4,6 +4,8 @@ import styles from '../app/page.module.css';
 import { useState, useRef, useEffect } from 'react';
 import WikipediaModal from './WikipediaModal';
 import { Mic, Loader2 } from 'lucide-react';
+import { z } from 'zod';
+import { errorMessage, jsonBody, requestJson } from '@/lib/client-api';
 
 type Role = 'ai' | 'user';
 
@@ -16,137 +18,132 @@ export interface Message {
 interface ChatAreaProps {
     topic: string;
     messages: Message[];
-    onSendMessage: (text: string) => void;
+    onSendMessage: (text: string) => Promise<boolean>;
     isLoading: boolean;
+    isComplete?: boolean;
     masteryScore?: number;
 }
 
-export default function ChatArea({ topic, messages, onSendMessage, isLoading, masteryScore = 0 }: ChatAreaProps) {
+export default function ChatArea({ topic, messages, onSendMessage, isLoading, isComplete = false, masteryScore = 0 }: ChatAreaProps) {
     const [inputText, setInputText] = useState('');
     const [isLearnModalOpen, setIsLearnModalOpen] = useState(false);
-    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const transcriptRef = useRef<HTMLDivElement>(null);
     const [isRecording, setIsRecording] = useState(false);
     const [isTranscribing, setIsTranscribing] = useState(false);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<BlobPart[]>([]);
-
-    const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    };
+    const mediaStreamRef = useRef<MediaStream | null>(null);
+    const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const mountedRef = useRef(true);
+    const sendingRef = useRef(false);
+    const startingRecordingRef = useRef(false);
+    const [mediaError, setMediaError] = useState('');
 
     useEffect(() => {
-        scrollToBottom();
+        const transcript = transcriptRef.current;
+        if (transcript) transcript.scrollTop = transcript.scrollHeight;
     }, [messages, isLoading]);
 
-    const startRecording = async () => {
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+            if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+            const recorder = mediaRecorderRef.current;
+            if (recorder && recorder.state !== 'inactive') {
+                recorder.onstop = null;
+                recorder.stop();
+            }
+            mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+        };
+    }, []);
+
+    const handleTranscription = async (audioBlob: Blob) => {
+        if (!mountedRef.current) return;
+        setIsTranscribing(true);
+        setMediaError('');
+        let audioContext: AudioContext | undefined;
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const mediaRecorder = new MediaRecorder(stream);
-            mediaRecorderRef.current = mediaRecorder;
-            audioChunksRef.current = [];
-
-            mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0) {
-                    audioChunksRef.current.push(e.data);
-                }
-            };
-
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-                await handleTranscription(audioBlob);
-                stream.getTracks().forEach(track => track.stop());
-            };
-
-            mediaRecorder.start();
-            setIsRecording(true);
-        } catch (error: any) {
-            console.error("Error accessing microphone:", error);
-            alert(`Microphone access is required. Error: ${error.message || error}`);
-            setIsRecording(false);
+            audioContext = new AudioContext();
+            const decoded = await audioContext.decodeAudioData(await audioBlob.arrayBuffer());
+            if (decoded.duration <= 0 || decoded.duration > 60) throw new Error('Please record between a moment and 60 seconds of audio.');
+            // Render to mono at 16kHz rather than assuming the browser honors a requested rate.
+            const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+            const source = offline.createBufferSource();
+            source.buffer = decoded;
+            source.connect(offline.destination);
+            source.start();
+            const rendered = await offline.startRendering();
+            const samples = Array.from(rendered.getChannelData(0), sample => Math.max(-1, Math.min(1, sample)));
+            const data = await requestJson('/api/transcribe', z.object({ text: z.string() }), jsonBody({ audio: samples, sampleRate: 16000 }));
+            if (mountedRef.current) {
+                const combined = `${inputText}${inputText ? ' ' : ''}${data.text}`;
+                setInputText(combined.slice(0, 6000));
+                if (combined.length > 6000) setMediaError('The transcript exceeds the 6,000-character message limit. Only the first part was added; please send it before recording more.');
+                if (!data.text.trim()) setMediaError('No speech was detected. Try again in a quiet place.');
+            }
+        } catch (error) {
+            if (mountedRef.current) setMediaError(errorMessage(error, 'Audio could not be transcribed. Please try again.'));
+        } finally {
+            await audioContext?.close().catch(() => undefined);
+            if (mountedRef.current) setIsTranscribing(false);
         }
     };
 
     const stopRecording = () => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-            mediaRecorderRef.current.stop();
-            setIsRecording(false);
-        }
+        if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+        if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+        mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+        if (mountedRef.current) setIsRecording(false);
     };
 
-    const handleTranscription = async (audioBlob: Blob) => {
-        setIsTranscribing(true);
+    const startRecording = async () => {
+        if (startingRecordingRef.current) return;
+        startingRecordingRef.current = true;
+        setMediaError('');
         try {
-            // Because Node.js (and Xenova/transformers) doesn't have a reliable built-in AudioContext to parse 
-            // WebM files without external C++ FFmpeg dependencies, we will do the heavy lifting right here 
-            // in the browser where full audio processing power is available!
-            
-            // 1. Read the Blob as an ArrayBuffer
-            const arrayBuffer = await audioFileToBuffer(audioBlob);
-            
-            // 2. Decode it into 16kHz Float32 Audio Buffer using browser's AudioContext
-            const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-            const decodedAudioData = await audioContext.decodeAudioData(arrayBuffer);
-            
-            // 3. Extract the actual raw Float32 data array from the first channel (mono)
-            const float32Data = decodedAudioData.getChannelData(0);
-            
-            // 4. Send this exact raw float32 array as a giant JSON array to our Node.js server! 
-            // (It's slightly larger than WebM, but guarantees 100% compatibility with Transformers pipeline)
-            
-            const response = await fetch('/api/transcribe', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ 
-                    audio: Array.from(float32Data) 
-                }),
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data.text) {
-                    setInputText(prev => prev ? `${prev} ${data.text}` : data.text);
+            if (!navigator.mediaDevices?.getUserMedia) throw new Error('Recording requires a supported browser and HTTPS (or localhost).');
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            if (!mountedRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
+            mediaStreamRef.current = stream;
+            const recorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = recorder;
+            audioChunksRef.current = [];
+            recorder.ondataavailable = event => { if (event.data.size > 0) audioChunksRef.current.push(event.data); };
+            recorder.onerror = () => { stopRecording(); setMediaError('Recording failed. Please try again.'); };
+            recorder.onstop = () => {
+                stream.getTracks().forEach(track => track.stop());
+                if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+                if (mountedRef.current) {
+                    setIsRecording(false);
+                    void handleTranscription(new Blob(audioChunksRef.current, { type: recorder.mimeType }));
                 }
-            } else {
-                console.error("Transcription failed", await response.text());
-                alert("Transcription failed. The local API might be busy processing another item.");
-            }
+            };
+            recorder.start();
+            setIsRecording(true);
+            stopTimerRef.current = setTimeout(stopRecording, 59_000);
         } catch (error) {
-            console.error("Error during transcription:", error);
-            alert("An error occurred during audio processing or transcription.");
-        } finally {
-            setIsTranscribing(false);
-        }
-    };
-    
-    // Helper to read blob
-    const audioFileToBuffer = (blob: Blob) => {
-        return new Promise<ArrayBuffer>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as ArrayBuffer);
-            reader.onerror = reject;
-            reader.readAsArrayBuffer(blob);
-        });
+            mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+            setMediaError(errorMessage(error, 'Microphone access is unavailable. You can type your explanation.'));
+            setIsRecording(false);
+        } finally { startingRecordingRef.current = false; }
     };
 
-    const toggleRecording = () => {
-        if (isRecording) {
-            stopRecording();
-        } else {
-            startRecording();
-        }
-    };
+    const toggleRecording = () => { if (isRecording) stopRecording(); else void startRecording(); };
 
-    const handleSend = () => {
-        if (inputText.trim() && !isLoading) {
-            onSendMessage(inputText);
-            setInputText('');
-        }
+    const handleSend = async () => {
+        if (!inputText.trim() || isLoading || isRecording || isTranscribing || sendingRef.current) return;
+        sendingRef.current = true;
+        try {
+            const saved = await onSendMessage(inputText);
+            if (saved) setInputText('');
+        } catch {
+            setMediaError('Your message could not be saved. The draft has been kept; please retry.');
+        } finally { sendingRef.current = false; }
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
+        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             handleSend();
         }
@@ -155,12 +152,15 @@ export default function ChatArea({ topic, messages, onSendMessage, isLoading, ma
     return (
         <div className={styles.chatWrapper}>
             <header className={styles.chatHeader}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                     <h2>Current topic: <span>{topic}</span></h2>
                     <button 
                         className="button-secondary" 
                         style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}
-                        onClick={() => setIsLearnModalOpen(true)}
+                        onClick={event => {
+                            event.currentTarget.focus();
+                            setIsLearnModalOpen(true);
+                        }}
                         title="Learn more about this topic"
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -180,7 +180,7 @@ export default function ChatArea({ topic, messages, onSendMessage, isLoading, ma
                 />
             )}
 
-            <div id="chat-history-container" className={styles.chatArea}>
+            <div ref={transcriptRef} id="chat-history-container" className={styles.chatArea} role="log" aria-label="Study conversation" tabIndex={0}>
                 {messages.map((msg) => (
                     <div
                         key={msg.id}
@@ -202,7 +202,6 @@ export default function ChatArea({ topic, messages, onSendMessage, isLoading, ma
                         </div>
                     </div>
                 )}
-                <div ref={messagesEndRef} />
             </div>
 
             {masteryScore === 100 && (
@@ -211,29 +210,33 @@ export default function ChatArea({ topic, messages, onSendMessage, isLoading, ma
                 </div>
             )}
 
+            {mediaError && <p role="alert" style={{ color: '#fca5a5', padding: '8px 16px' }}>{mediaError}</p>}
+            {isRecording && <p role="status">Recording stops automatically after one minute.</p>}
             <div className={styles.inputArea}>
                 <div className={styles.inputWrapper}>
                     <button
                         className={`${styles.recordBtn} ${isRecording ? styles.recordingPulse : ''}`}
                         onClick={toggleRecording}
-                        disabled={isLoading || isTranscribing || masteryScore === 100}
+                        disabled={isLoading || isComplete || isTranscribing}
                         title={isRecording ? "Stop recording" : "Start speaking"}
                     >
                         {isTranscribing ? <Loader2 size={20} className="animate-spin" /> : <Mic size={20} color={isRecording ? '#ef4444' : 'currentColor'} />}
                     </button>
                     <textarea
-                        placeholder={masteryScore === 100 ? "You’ve wrapped this one up nicely." : isTranscribing ? "Transcribing..." : isRecording ? "Listening..." : "Explain it as if I’ve never seen it before..."}
+                        placeholder={isTranscribing ? "Transcribing..." : isRecording ? "Listening..." : "Explain it as if I’ve never seen it before..."}
                         className={styles.textarea}
                         rows={1}
+                        maxLength={6000}
+                        aria-label="Your explanation"
                         value={inputText}
                         onChange={(e) => setInputText(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        disabled={isLoading || isTranscribing || masteryScore === 100}
+                        disabled={isLoading || isComplete || isTranscribing || isRecording}
                     ></textarea>
                     <button
                         className="button-primary"
                         onClick={handleSend}
-                        disabled={isLoading || isTranscribing || (!inputText.trim() && !isRecording) || masteryScore === 100}
+                        disabled={isLoading || isComplete || isTranscribing || isRecording || !inputText.trim()}
                     >
                         {isLoading ? '...' : 'Send'}
                     </button>

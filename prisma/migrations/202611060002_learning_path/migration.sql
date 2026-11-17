@@ -1,0 +1,2 @@
+ALTER TABLE "Session" ADD COLUMN "learningPath" TEXT;
+ALTER TABLE "Session" ADD COLUMN "pathIndex" INTEGER NOT NULL DEFAULT 0;

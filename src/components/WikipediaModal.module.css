@@ -1,54 +1,11 @@
-.overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(15, 23, 42, 0.7);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    padding: 24px;
-    animation: fadeIn 0.2s ease-out;
-}
-
-.modal {
-    background: linear-gradient(145deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98));
-    border: 1px solid rgba(59, 130, 246, 0.3);
-    border-radius: 20px;
-    width: 100%;
-    max-width: 600px;
-    max-height: 85vh;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 30px rgba(59, 130, 246, 0.1) inset;
-    overflow: hidden;
-    animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.header {
-    padding: 20px 24px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: rgba(30, 41, 59, 0.4);
-}
-
-.title {
-    font-size: 1.35rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 12px;
+.learnDialog > h2 {
+    padding-right: 44px;
 }
 
 .closeBtn {
+    position: absolute;
+    right: 12px;
+    top: 12px;
     background: transparent;
     border: none;
     color: var(--text-secondary);
@@ -69,8 +26,7 @@
 }
 
 .content {
-    padding: 24px;
-    overflow-y: auto;
+    padding-block: 12px;
     color: var(--text-secondary);
     line-height: 1.7;
     font-size: 1.05rem;
@@ -104,8 +60,7 @@
 }
 
 .footer {
-    padding: 16px 24px;
-    background: rgba(15, 23, 42, 0.8);
+    padding-top: 16px;
     border-top: 1px solid rgba(255, 255, 255, 0.05);
     display: flex;
     justify-content: flex-end;
@@ -154,14 +109,4 @@
 
 @keyframes spin {
     to { transform: rotate(360deg); }
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-}
-
-@keyframes slideUp {
-    from { opacity: 0; transform: translateY(20px); scale: 0.95; }
-    to { opacity: 1; transform: translateY(0); scale: 1; }
 }

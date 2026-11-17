@@ -1,45 +1,24 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
-import { auth } from '@/auth';
+import { ApiError, apiError, readJson, requireUser } from '@/lib/api';
 
-
-// For saving messages
+// A client can append its own ungraded message; AI evaluations are only written by /api/chat.
+const input = z.object({ role: z.literal('user'), content: z.string().trim().min(1).max(6000) }).strict();
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const user = await requireUser(req, 'messages', 20);
     const { id } = await params;
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const body = await req.json();
-    const { role, content } = body;
-
-    const existingSession = await prisma.session.findUnique({
-      where: { id }
+    const data = input.parse(await readJson(req, 40_000));
+    const message = await prisma.$transaction(async tx => {
+      const session = await tx.session.findFirst({ where: { id, userId: user.id } });
+      if (!session) throw new ApiError(404, 'Session not found.');
+      const last = await tx.message.findFirst({ where: { sessionId: id }, orderBy: { sequence: 'desc' } });
+      if ((last?.sequence ?? -1) >= 499) throw new ApiError(409, 'This session is full. Start a new session.');
+      const saved = await tx.message.create({ data: { ...data, sessionId: id, sequence: (last?.sequence ?? -1) + 1 } });
+      await tx.session.update({ where: { id, userId: user.id }, data: { version: { increment: 1 } } });
+      return saved;
     });
-
-    if (!existingSession || existingSession.userId !== session.user.id) {
-         return NextResponse.json({ error: 'Session not found or unauthorized' }, { status: 404 });
-    }
-
-    const message = await prisma.message.create({
-      data: {
-        sessionId: id,
-        role,
-        content
-      }
-    });
-
-    // Also update the session's updatedAt time
-    await prisma.session.update({
-        where: { id },
-        data: { updatedAt: new Date() }
-    });
-
-    return NextResponse.json(message);
-  } catch (error) {
-    console.error('Error adding message:', error);
-    return NextResponse.json({ error: 'Failed to add message' }, { status: 500 });
-  }
+    return NextResponse.json(message, { status: 201 });
+  } catch (error) { return apiError(error); }
 }

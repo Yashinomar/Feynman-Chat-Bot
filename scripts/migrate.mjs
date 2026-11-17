@@ -1,0 +1,11 @@
+import env from '@next/env';
+import { mkdirSync, closeSync, openSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { execFileSync } from 'node:child_process';
+env.loadEnvConfig(process.cwd());
+const url = process.env.DATABASE_URL;
+if (!url?.startsWith('file:')) throw new Error('Set DATABASE_URL to a SQLite file.');
+const path = resolve('prisma', url.slice(5));
+mkdirSync(dirname(path), { recursive: true });
+closeSync(openSync(path, 'a', 0o600));
+execFileSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'deploy'], { stdio: 'inherit' });

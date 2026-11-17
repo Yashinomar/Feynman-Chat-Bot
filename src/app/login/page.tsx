@@ -30,14 +30,14 @@ export default function LoginPage() {
         setError("Invalid username or password");
       } else {
         const session = await getSession();
-        if ((session?.user as any)?.role === 'ADMIN') {
+        if (session?.user?.role === 'ADMIN') {
           router.push('/admin');
         } else {
           router.push('/');
         }
         router.refresh();
       }
-    } catch (err) {
+    } catch {
       setError("An unexpected error occurred");
     } finally {
       setIsLoading(false);
@@ -58,7 +58,7 @@ export default function LoginPage() {
 
         <div style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '24px', padding: '32px', boxShadow: '0 20px 40px rgba(0,0,0,0.3)' }}>
           {error && (
-            <div style={{ background: 'rgba(2ef, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', color: '#f87171', padding: '12px', borderRadius: '12px', marginBottom: '20px', fontSize: '0.9rem', textAlign: 'center' }}>
+            <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', color: '#f87171', padding: '12px', borderRadius: '12px', marginBottom: '20px', fontSize: '0.9rem', textAlign: 'center' }}>
               {error}
             </div>
           )}
@@ -68,6 +68,10 @@ export default function LoginPage() {
               <label style={{ display: 'block', fontSize: '0.9rem', color: '#e2e8f0', marginBottom: '8px', fontWeight: 500 }}>Username</label>
               <input
                 type="text"
+                autoComplete="username"
+                minLength={3}
+                maxLength={32}
+                pattern="[a-zA-Z0-9_]{3,32}"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="Enter your username"
@@ -82,6 +86,8 @@ export default function LoginPage() {
               <label style={{ display: 'block', fontSize: '0.9rem', color: '#e2e8f0', marginBottom: '8px', fontWeight: 500 }}>Password</label>
               <input
                 type="password"
+                autoComplete="current-password"
+                maxLength={72}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter your password"
@@ -103,7 +109,7 @@ export default function LoginPage() {
 
           <div style={{ textAlign: 'center', marginTop: '24px', paddingTop: '24px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
             <p style={{ color: '#94a3b8', fontSize: '0.95rem' }}>
-              Don't have an account?{' '}
+              Don&apos;t have an account?{' '}
               <Link href="/register" style={{ color: '#60a5fa', textDecoration: 'none', fontWeight: 600 }}>
                 Sign up
               </Link>

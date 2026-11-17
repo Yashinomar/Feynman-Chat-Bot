@@ -1,12 +1,14 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Target, Heart, CheckCircle2, XCircle, ArrowRight, RefreshCcw, History, Home, Loader2, Sparkles, BookA } from 'lucide-react';
+import { Target, Heart, CheckCircle2, XCircle, RefreshCcw, History, Home, Sparkles, BookA } from 'lucide-react';
 import styles from './quiz.module.css';
 import Link from 'next/link';
 
 import { useSession } from 'next-auth/react';
+import { z } from 'zod';
+import { errorMessage, jsonBody, requestJson, studySessionsSchema } from '@/lib/client-api';
 
 interface QuizQuestion {
   question: string;
@@ -18,7 +20,7 @@ type GameState = 'setup' | 'loading' | 'playing' | 'result';
 
 export default function QuizPage() {
   const router = useRouter();
-  const { data: authSession, status } = useSession();
+  const { status } = useSession();
   
   // Game Configuration State
   const [gameState, setGameState] = useState<GameState>('setup');
@@ -38,16 +40,9 @@ export default function QuizPage() {
     if (status === 'unauthenticated') {
       router.push('/login');
     } else if (status === 'authenticated') {
-      fetch('/api/sessions')
-        .then(res => res.json())
-        .then(data => {
-          if (Array.isArray(data)) {
-            const topics = data.map((s: any) => s.topic as string);
-            const uniqueTopics = Array.from(new Set(topics)).filter(Boolean);
-            setHistoryTopics(uniqueTopics);
-          }
-        })
-        .catch(e => console.error('Failed to fetch sessions history', e));
+      requestJson('/api/sessions', studySessionsSchema)
+        .then(data => setHistoryTopics(Array.from(new Set(data.map(session => session.topic)))))
+        .catch(err => setErrorMsg(errorMessage(err)));
     }
   }, [status, router]);
 
@@ -64,22 +59,13 @@ export default function QuizPage() {
     setIsChecking(false);
 
     try {
-      const res = await fetch('/api/quiz', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic: topicToUse })
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to generate quiz');
-      }
+      const questionSchema = z.object({ question: z.string().min(1), options: z.array(z.string().min(1)).length(4), answer: z.string() }).refine(question => question.options.includes(question.answer));
+      const data = await requestJson('/api/quiz', z.object({ questions: z.array(questionSchema).length(10) }), jsonBody({ topic: topicToUse }));
 
       setQuestions(data.questions);
       setGameState('playing');
-    } catch (err: any) {
-      setErrorMsg(err.message || 'An error occurred while building your quiz.');
+    } catch (err) {
+      setErrorMsg(errorMessage(err, 'An error occurred while building your quiz.'));
       setGameState('setup');
     }
   };
@@ -120,6 +106,7 @@ export default function QuizPage() {
   // ---------------------------------------------------------------------------
   // RENDER: SETUP
   // ---------------------------------------------------------------------------
+  if (status !== 'authenticated') return <p role="status">Loading your account…</p>;
   if (gameState === 'setup') {
     return (
       <div className={styles.container}>
@@ -139,6 +126,7 @@ export default function QuizPage() {
               type="text" 
               className={styles.input}
               placeholder="Enter any topic (e.g., Photosynthesis, React Hooks)" 
+              maxLength={200}
               value={topicInput}
               onChange={e => setTopicInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleStartQuiz(topicInput)}

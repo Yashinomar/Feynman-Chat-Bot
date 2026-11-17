@@ -74,7 +74,7 @@
 
 .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
     gap: 24px;
 }
 
@@ -83,14 +83,13 @@
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 16px;
     padding: 24px;
-    cursor: pointer;
     transition: all 0.2s ease;
     display: flex;
     flex-direction: column;
     height: 100%;
 }
 
-.card:hover {
+.card:hover, .card:focus-within {
     transform: translateY(-4px);
     border-color: rgba(59, 130, 246, 0.4);
     box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
@@ -110,6 +109,7 @@
     color: var(--text-primary);
     margin: 0;
     line-height: 1.4;
+    overflow-wrap: anywhere;
 }
 
 .deleteBtn {
@@ -157,11 +157,16 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    color: #3b82f6;
+    color: #93c5fd;
     font-weight: 600;
     transition: transform 0.2s;
 }
 
-.card:hover .resumeBtn {
+.resumeBtn:hover {
     transform: translateX(4px);
+}
+
+.resumeBtn:focus-visible, .deleteBtn:focus-visible {
+    outline: 2px solid #93c5fd;
+    outline-offset: 3px;
 }
